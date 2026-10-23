@@ -61,7 +61,83 @@ size_t nr_free_pages(void) {
     return pmm_manager->nr_free_pages();
 }
 
-//lab2 function1 YOUR CODE
+//lab2 function1 2411210
+static void page_init(void) {
+    extern char end[];
+
+    uint64_t mem_base = get_memory_base();
+    uint64_t mem_size = get_memory_size();
+    uint64_t mem_end;
+    uintptr_t mem_end_aligned;
+    uintptr_t pages_end_va;
+    uintptr_t pages_end_pa;
+    uintptr_t freemem;
+    size_t page_count;
+    size_t free_page_count;
+    size_t i;
+
+    // 当前内核使用固定的虚实地址映射偏移
+    va_pa_offset = PHYSICAL_MEMORY_OFFSET;
+
+    // 检查 DTB 提供的物理内存信息
+    if (mem_base == 0 || mem_size == 0) {
+        panic("page_init: invalid DTB memory information");
+    }
+
+    if (mem_size > (~(uint64_t)0 - mem_base)) {
+        panic("page_init: physical memory range overflow");
+    }
+
+    mem_end = mem_base + mem_size;
+
+    // nbase 固定对应 DRAM_BASE，因此当前框架要求内存从这里开始
+    if (mem_base != DRAM_BASE) {
+        panic("page_init: unexpected physical memory base");
+    }
+
+    mem_end_aligned = ROUNDDOWN(mem_end, PGSIZE);
+    npage = PPN(mem_end);
+
+    if (npage <= nbase || mem_end_aligned <= mem_base) {
+        panic("page_init: invalid physical memory range");
+    }
+
+    // 在内核镜像结束位置之后按页对齐放置 Page 数组
+    pages = (struct Page *)ROUNDUP((uintptr_t)end, PGSIZE);
+
+    page_count = npage - nbase;
+
+    // 所有页面先初始化为保留状态
+    for (i = 0; i < page_count; i++) {
+        pages[i].ref = 0;
+        pages[i].flags = 0;
+        pages[i].property = 0;
+        SetPageReserved(&pages[i]);
+    }
+
+    // 计算 Page 描述符数组末尾对应的物理地址
+    pages_end_va =
+        (uintptr_t)pages + page_count * sizeof(struct Page);
+
+    pages_end_pa = PADDR(pages_end_va);
+
+    // 描述符数组之后的第一个页对齐地址作为空闲内存起点
+    freemem = ROUNDUP(pages_end_pa, PGSIZE);
+
+    if (freemem < mem_base || freemem >= mem_end_aligned) {
+        panic("page_init: no available physical memory");
+    }
+
+    free_page_count = (mem_end_aligned - freemem) / PGSIZE;
+
+    if (free_page_count == 0) {
+        panic("page_init: no free pages");
+    }
+
+    // 将剩余可用页面交给当前的物理内存管理器
+    init_memmap(pa2page(freemem), free_page_count);
+}
+
 
 /* pmm_init - initialize the physical memory management */
 void pmm_init(void) {
