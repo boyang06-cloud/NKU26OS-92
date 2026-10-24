@@ -1,3 +1,7 @@
 # OS Lab 编译产物
 /code/bin/
 /code/obj/
+
+prompt_template.md
+report_template.md
+AGENTS.md
