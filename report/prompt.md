@@ -38,3 +38,42 @@
 
 如果发现当前代码框架存在限制或假设，请明确说明，不要默默替换成其他版本的实现。
 ```
+
+# 模块二：Best-Fit 物理页分配
+## 任务一：实现最佳适配页面分配器
+
+```
+我正在完成 riscv64-ucore 操作系统实验 Lab2，负责模块二：Best-Fit 物理页分配。
+
+请先阅读以下源码：
+- kern/mm/best_fit_pmm.c
+- kern/mm/best_fit_pmm.h
+- kern/mm/default_pmm.c
+- kern/mm/pmm.c
+- kern/mm/pmm.h
+- kern/mm/memlayout.h
+- libs/list.h
+
+当前 best_fit_pmm.c 中存在 `//lab2 function2-2 YOUR CODE` 标记，需要实现 best_fit_pmm_manager。
+可以参照 default_pmm.c 的结构，但分配策略必须从 first-fit 改成 best-fit。
+
+具体要求：
+1. best_fit_init：初始化 free_list，nr_free = 0。
+2. best_fit_init_memmap：把 [base, base+n) 每页清 ref、清 flags 并标记 Reserved；
+   首页 property = n 并置 Property；按地址升序插入 free_list；nr_free += n。
+3. best_fit_alloc_pages(n)：n > nr_free 时返回 NULL；遍历整个空闲链表，
+   在所有 property >= n 的块中选择 property 最小的一个；找不到返回 NULL；
+   选中块若大于 n，把 page+n 开始的剩余部分插回链表；nr_free -= n；返回块首。
+4. best_fit_free_pages(base, n)：检查每页非 Reserved 且非 Property；清 flags 和 ref；
+   设置 base->property = n 并置 Property；nr_free += n；按地址升序插回链表；
+   分别与前一空闲块、后一空闲块合并。
+5. 定义并导出 best_fit_pmm_manager，把各函数指针填好。
+6. 在 pmm.c 的 init_pmm_manager() 中选择 &best_fit_pmm_manager。
+7. 不修改 basic_check、best_fit_check，也不修改模块一的 page_init。
+
+请同时给出：
+- 推荐代码；
+- 最佳适配与首次适配在分配路径上的具体差别；
+- 释放时为什么必须合并前后空闲块；
+- 对照 tools/test_lab2.c 中 test_best_fit() 以及 best_fit_pmm.c 中 best_fit_check() 的验证方法。
+```

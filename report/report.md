@@ -15,7 +15,7 @@
 |------|----------------|
 | 2411210-王禹博 | 模块一：物理内存初始化功能 |
 | 2410550-杨博   | [练习或模块名称] |
-| 2413124-梁昊   | [练习或模块名称] |
+| 2413124-梁昊   | 模块二：Best-Fit 物理页分配 |
 
 实验报告如何分工？
 
@@ -41,7 +41,7 @@
 |------|------------|---------|------|
 | 2411210-王禹博 | Codex | GPT-6.1 sol|
 | 2410550-杨博 | | |
-| 2413124-梁昊 | | |
+| 2413124-梁昊 | Claude Code（VS Code 扩展） | Claude | |
 
 
 ## 三、实验整体逻辑分析
@@ -163,79 +163,114 @@ void pmm_init(void);
 
 ---
 
-### 功能模块二：
+### 功能模块二：Best-Fit 物理页分配
 
-**负责人：**
+**负责人：** 2413124-梁昊
 
 #### 模块功能描述
 
 **需要实现/修改的函数：**
 
 ```c
-// 列出本模块涉及的所有函数签名
+static void best_fit_init(void);
+static void best_fit_init_memmap(struct Page *base, size_t n);
+static struct Page *best_fit_alloc_pages(size_t n);
+static void best_fit_free_pages(struct Page *base, size_t n);
+static size_t best_fit_nr_free_pages(void);
 
+const struct pmm_manager best_fit_pmm_manager;
 ```
 
 **功能说明：**
 
-[简要描述该模块的功能，包括：
-- 该模块在整个系统中的作用
-- 需要处理的主要场景
-- 与其他模块的交互关系]
+本模块实现物理内存管理器 `best_fit_pmm_manager`，向上提供与 `default_pmm_manager` 相同的接口。`pmm.c` 中的 `init_memmap()`、`alloc_pages()`、`free_pages()`、`nr_free_pages()` 不需要改动，只要把 `pmm_manager` 指向本模块即可。
+
+分配采用最佳适配策略：遍历空闲链表，在所有 `property >= n` 的连续空闲块中选择 `property` 最小的那个，从而尽量保留大块内存。若选中的块比请求大，则把剩余部分留在链表里继续作为空闲块。释放时按地址顺序插回链表，并与前后相邻的空闲块合并，避免产生碎片。
+
+模块一与本模块的接口是 `init_memmap(base, n)`：模块一算好可用物理内存区间后，把这段区间交给本模块建立空闲链表，之后内核的所有页分配都经过本模块。
 
 #### 最终提示词
 
-以下是经过迭代优化后，最终成功实现该功能的提示词：
-
 ````markdown
+[PROMPT]
+在 riscv64-ucore 的 lab2 中实现 best_fit_pmm.c。当前文件只有 pmm_manager 所需函数的空位，
+同一目录下的 default_pmm.c 已经提供 first-fit 的完整实现，可作为结构参考，但分配策略必须改成最佳适配。
 
-[按照提示词模板，给出具体的提示词]
+[RELY]
+- struct Page 的字段：ref、flags、property、page_link
+- PageReserved / PageProperty / SetPageProperty / ClearPageProperty
+- list_init / list_add / list_add_before / list_del / list_empty / list_next / list_prev
+- le2page、alloc_page、free_page
+- free_area_t、free_list、nr_free
 
+[GUARANTEE]
+实现并导出：
+static void best_fit_init(void);
+static void best_fit_init_memmap(struct Page *base, size_t n);
+static struct Page *best_fit_alloc_pages(size_t n);
+static void best_fit_free_pages(struct Page *base, size_t n);
+static size_t best_fit_nr_free_pages(void);
+const struct pmm_manager best_fit_pmm_manager;
+同时把 pmm.c 中 init_pmm_manager() 的选择改为 &best_fit_pmm_manager。
+
+[SPECIFICATION]
+1. init_memmap：把 [base, base+n) 的每页清 ref、清 flags、标记 Reserved；首页 property = n 并置 Property；
+   按地址顺序插入 free_list；nr_free += n。
+2. alloc_pages(n)：n > nr_free 返回 NULL；遍历整个链表，在所有 property >= n 的块中选择 property 最小者；
+   找不到返回 NULL；选中后从链表删除，若 property > n 则把 page+n 开始的剩余块插回并令 property -= n；
+   nr_free -= n；返回块首。
+3. free_pages(base, n)：检查每页非 Reserved 且非 Property，清 flags、清 ref；base->property = n、
+   置 Property、nr_free += n；按地址顺序插回；分别与前一空闲块和后一空闲块合并。
+4. 不得修改 basic_check 和 best_fit_check。
 ````
 
 #### 实现迭代过程
 
-本模块的实现经历了 [N] 次迭代，过程如下：
+本模块的实现经历了 2 次迭代，过程如下：
 
 ---
 
 ##### 第一次迭代
 
-如果设计的prompt生成代码后出现问题：
+先按 `default_pmm.c` 的结构写出五个函数，分配部分沿用了 first-fit 的写法：遍历链表，遇到第一个 `property >= n` 的块就 `break`。
 
 **遇到的问题：**
-- 问题1：问题描述、错误信息和原因分析
-- 问题2：问题描述、错误信息和原因分析
+
+运行注入测试后 `[Test 2] Best-Fit: FAIL`。`best_fit_check` 在释放 `p0+1` 的两页和 `p0+4` 的一页之后，期望分配 1 页时返回 `p0+4` 这个最小的空闲块，但 first-fit 返回了链表中靠前的大块，导致 `assert(p0 + 4 == p1)` 失败。
 
 **问题解决策略：**
-- 针对问题1：[说明如何修改提示词]
-- 针对问题2：[说明如何修改提示词]
 
-如果没有问题：
-
-**最终结果：**
-
-经过 [N] 次迭代，该模块最终：
-- ✅ 编译通过
-- ✅ 所有相关测试通过
-- ✅ 功能符合预期
-
-**关键改进点总结（如有）：**
-1. [改进点1：例如，在 [RELY] 中补充了完整的系统调用号定义]
-2. [改进点2：例如，在 [SPECIFICATION] 中明确了异常处理的边界条件]
-3. [改进点3：例如，增加了对用户指针合法性检查的要求]
+在提示词的 [SPECIFICATION] 中把分配规则明确成“遍历整个链表，在所有足够大的块中选 `property` 最小的一个”，并记录当前最小块大小 `min_size`，而不是遇到第一个合适的块就退出。修改后该断言通过。
 
 ---
 
-##### 第二次迭代（如有）
+##### 第二次迭代
 
-[按照和第一次迭代相同的格式]
+**遇到的问题：**
+
+分配已经符合最佳适配，但 `best_fit_check` 末尾的 `assert(total == 0)` 仍会失败。原因是释放时只把页插回链表，没有和相邻空闲块合并，空闲链表里出现本应合并的相邻块，最后按块统计的数量与原始链表对不上。
+
+**问题解决策略：**
+
+在提示词中补充释放流程的两个合并步骤：插回后先看前驱，若 `prev + prev->property == base` 则把当前块并入前驱；再看后继，若 `base + base->property == next` 则把后继并入当前块。同时插入时保持按地址升序，保证相邻块在链表中也相邻。
 
 ---
 
-##### 第三次迭代（如有）
+##### 最终结果
 
-[按照和第一次迭代相同的格式]
+经过 2 次迭代，该模块最终：
+- 编译通过
+- `[Test 1] Page Init: PASS`
+- `[Test 2] Best-Fit: PASS`
+- `check_alloc_page() succeeded!`
+
+#### 运行环境适配
+
+本机使用 QEMU 11.1 + OpenSBI 1.8.1。Makefile 中的 `make qemu` 用 `-device loader` 启动时，OpenSBI 的 Domain0 Next Address 为 0，内核不会被执行；改用
+`qemu-system-riscv64 -machine virt -display none -bios default -kernel bin/ucore.img -serial stdio`
+后可以正常启动。
+
+另外，`entry.S` 的启动页表原本只映射了 `0xFFFFFFFFC0000000` 以上的虚拟地址。内核入口实际从物理地址 `0x80200000` 开始执行，执行 `csrw satp` 后，下一条指令的取指仍发生在物理地址 `0x80200038`；该地址没有映射就会触发取指缺页（GDB 里 `scause = 12`）。因此在启动页表中补了一条 `0x80000000 - 0xBFFFFFFF` 的恒等映射，开分页瞬间和之后的高地址映射都能正常执行。该改动不改变页表大小，也不影响 `page_init` 对物理内存的统计。
 
 ---
 
@@ -261,6 +296,44 @@ void pmm_init(void);
 - 编译及运行成功的输出（make qemu），可能有多个
 - 测试通过的结果（make grade），只有一个
 -->
+
+### 编译与运行
+
+```bash
+make GCCPREFIX=riscv-none-elf- DEFS="-march=rv64gc -mabi=lp64d"
+qemu-system-riscv64 -machine virt -display none -bios default -kernel bin/ucore.img -serial stdio
+```
+
+内核串口输出：
+
+```text
+DTB Init
+HartID: 0
+DTB Address: 0x87e00000
+Physical Memory from DTB:
+  Base: 0x0000000080000000
+  Size: 0x0000000008000000 (128 MB)
+  End:  0x0000000087ffffff
+DTB init completed
+(THU.CST) os is loading ...
+Special kernel symbols:
+  entry  0xffffffffc02000d6 (virtual)
+  etext  0xffffffffc02018a8 (virtual)
+  edata  0xffffffffc0206018 (virtual)
+  end    0xffffffffc0206078 (virtual)
+Kernel executable memory footprint: 24KB
+memory management: best_fit_pmm_manager
+check_alloc_page() succeeded!
+satp virtual address: 0xffffffffc0205000
+satp physical address: 0x0000000080205000
+```
+
+按 `tools/inject.py` 注入评测代码后，两个检查项均通过：
+
+```text
+[Test 1] Page Init: PASS
+[Test 2] Best-Fit: PASS
+```
 
 **测试截图：**
 
