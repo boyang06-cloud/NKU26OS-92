@@ -1,10 +1,21 @@
 # 模块一：物理内存初始化功能
 ## 任务一：实现物理内存探测与页描述符初始化功能
 
-```
-我正在完成 riscv64-ucore 操作系统实验 Lab2，负责模块一：物理内存探测与页描述符初始化。
+```text
+[PROMPT]
+**任务**：我正在完成 riscv64-ucore 操作系统实验 Lab2，负责模块一：物理内存探测与页描述符初始化。请结合当前源码，在 kern/mm/pmm.c 中实现 page_init()，而不是直接套用其他版本 uCore 的代码。
 
-请先阅读以下源码：
+**操作要求**：必须在项目中修改实际文件，保留现有代码。不修改其他组员负责的页面分配算法，不改变现有接口。
+
+**输出要求**：使用下面 [RELY]、[GUARANTEE]、[SPECIFICATION] 中的信息，并同时给出：
+- 推荐的代码补丁；
+- 每个关键变量的含义；
+- 对照 tools/test_lab2.c 中 test_page_init() 的逐项验证方法；
+- 可能出现的编译错误、运行错误和对应排查步骤。
+- 解释每一步的设计原因、边界条件及潜在错误。
+
+[RELY]
+请先阅读以下源码（路径相对于 code/）：
 - kern/driver/dtb.c
 - kern/driver/dtb.h
 - kern/init/entry.S
@@ -14,9 +25,26 @@
 - kern/mm/memlayout.h
 - kern/mm/mmu.h
 
-当前 pmm.c 中存在 `//lab2 function1 YOUR CODE` 标记，pmm_init() 调用了 page_init()，但源码中尚未实现该函数。
+可以依赖当前工程中的以下定义与接口，具体定义以源码为准：
+- 宏与地址约定：PHYSICAL_MEMORY_OFFSET、DRAM_BASE、PGSIZE、PPN、ROUNDUP。
+- 数据结构：struct Page，其相关字段为 ref、flags、property。
+- 全局变量：va_pa_offset、npage、nbase、pages；链接器符号：end。
+- DTB 接口：uint64_t get_memory_base(void)、uint64_t get_memory_size(void)。
+- 地址转换与空闲页登记接口：PADDR()、pa2page()、init_memmap()。
 
-请结合当前源码实现 page_init()，而不是直接套用其他版本 uCore 的代码。
+原任务框架在 pmm.c 中提供 `//lab2 function1 YOUR CODE` 标记，pmm_init() 已调用尚待实现的 page_init()。
+
+[GUARANTEE]
+必须实现的函数：
+    static void page_init(void);
+
+保留现有接口及 pmm_init() 对 page_init() 的调用，不修改其他组员负责的页面分配算法。
+
+[SPECIFICATION]
+## page_init
+**Pre-Condition**：DTB 接口能够提供物理内存信息，调用流程遵循现有 pmm_init() 框架。
+
+**Post-Condition**：物理内存范围和页描述符得到正确初始化，内核及描述符数组等占用区域保持保留，其余可用完整页面通过现有接口登记。
 
 具体要求：
 1. 设置 va_pa_offset = PHYSICAL_MEMORY_OFFSET。
@@ -27,16 +55,8 @@
 6. 计算描述符数组结束后的物理地址，将其按页向上对齐作为空闲内存起点。
 7. 确保内核镜像、描述符数组和其他前置占用内存不会被加入空闲页区。
 8. 使用现有的 pa2page()、PADDR() 和 init_memmap() 接口建立可用内存区间。
-9. 不修改其他组员负责的页面分配算法，不改变现有接口。
-10. 解释每一步的设计原因、边界条件及潜在错误。
 
-请同时给出：
-- 推荐的代码补丁；
-- 每个关键变量的含义；
-- 对照 tools/test_lab2.c 中 test_page_init() 的逐项验证方法；
-- 可能出现的编译错误、运行错误和对应排查步骤。
-
-如果发现当前代码框架存在限制或假设，请明确说明，不要默默替换成其他版本的实现。
+**Requirements**：如果发现当前代码框架存在限制或假设，请明确说明，不要默默替换成其他版本的实现。
 ```
 
 # 模块二：Best-Fit 物理页分配

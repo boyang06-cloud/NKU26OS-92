@@ -91,11 +91,47 @@ void pmm_init(void);
 以下提示词用于根据当前实验源码实现并审查 `page_init()`。整理后的提示词应在提交前与实际使用记录核对。
 
 ```text
-我正在完成 riscv64-ucore 操作系统实验 Lab2，负责模块一：物理内存探测与页描述符初始化。请以当前项目源码为准，不要套用其他版本 uCore 的实现。
+[PROMPT]
+**任务**：我正在完成 riscv64-ucore 操作系统实验 Lab2，负责模块一：物理内存探测与页描述符初始化。当前 pmm.c 中的 page_init() 需要实现。请以当前项目源码为准，不要套用其他版本 uCore 的实现。
 
-请阅读 kern/driver/dtb.c、kern/driver/dtb.h、kern/init/entry.S、kern/init/init.c、kern/mm/pmm.c、kern/mm/pmm.h、kern/mm/memlayout.h、kern/mm/mmu.h，以及相关测试代码。
+**操作要求**：必须在项目中修改实际文件，在 kern/mm/pmm.c 中实现 page_init()，保留现有代码，遵循项目已有接口和地址布局约定。
 
-当前 pmm.c 中的 page_init() 需要实现。请遵循项目已有接口和地址布局约定，完成以下工作：
+**输出要求**：使用下面 [RELY]、[GUARANTEE]、[SPECIFICATION] 中的信息，并完成以下说明：
+- 解释每个关键变量、地址单位、边界条件和当前实现依赖的内存布局假设。
+- 提供代码检查、单文件编译、完整构建和运行验证的步骤，并明确区分这些验证的结论。
+
+[RELY]
+请先阅读以下源码（路径相对于 code/）：
+- kern/driver/dtb.c
+- kern/driver/dtb.h
+- kern/init/entry.S
+- kern/init/init.c
+- kern/mm/pmm.c
+- kern/mm/pmm.h
+- kern/mm/memlayout.h
+- kern/mm/mmu.h
+- 相关测试代码
+
+可以依赖当前工程中的以下定义与接口，具体定义以源码为准：
+- 宏与地址约定：PHYSICAL_MEMORY_OFFSET、DRAM_BASE、PGSIZE、PPN、ROUNDUP。
+- 数据结构：struct Page，其相关字段为 ref、flags、property。
+- 全局变量：va_pa_offset、npage、nbase、pages；链接器符号：end。
+- DTB 接口：uint64_t get_memory_base(void)、uint64_t get_memory_size(void)。
+- 地址转换与空闲页登记接口：PADDR()、pa2page()、init_memmap()。
+
+[GUARANTEE]
+必须实现的函数：
+    static void page_init(void);
+
+保留现有接口及 pmm_init() 对 page_init() 的调用，不修改其他组员负责的页面分配算法。
+
+[SPECIFICATION]
+## page_init
+**Pre-Condition**：DTB 接口能够提供物理内存信息，调用流程遵循现有 pmm_init() 框架。
+
+**Post-Condition**：物理内存范围和页描述符得到正确初始化，内核及描述符数组等占用区域保持保留，其余可用完整页面通过现有接口登记。
+
+具体要求：
 1. 按当前框架设置 va_pa_offset = PHYSICAL_MEMORY_OFFSET。
 2. 通过 get_memory_base() 和 get_memory_size() 获取 DTB 解析出的物理内存基址和大小，并检查无效值及地址加法溢出。
 3. 遵循 DRAM_BASE、nbase、PPN、PGSIZE 的定义，计算 npage 和 Page 描述符数量。
@@ -104,10 +140,8 @@ void pmm_init(void);
 6. 计算 Page 描述符数组结束位置对应的物理地址，按页向上对齐，确定可用完整物理页的起点。
 7. 不得将内核镜像、Page 描述符数组或其他已占用区域加入空闲页区。
 8. 使用现有 PADDR()、pa2page() 和 init_memmap() 接口，不要重写其他组员负责的分配算法。
-9. 解释每个关键变量、地址单位、边界条件和当前实现依赖的内存布局假设。
-10. 提供代码检查、单文件编译、完整构建和运行验证的步骤，并明确区分这些验证的结论。
 
-如果源码和上述假设不一致，请先指出差异，不要修改框架测试或其他模块。
+**Requirements**：如果源码和上述假设不一致，请先指出差异，不要修改框架测试或其他模块。
 ```
 
 #### 实现迭代过程
@@ -165,7 +199,22 @@ void pmm_init(void);
 
 ---
 
-### 功能模块二：Best-Fit 物理页分配
+### 功能模块二
+
+### 任务一：理解first-fit 连续物理内存分配算法（思考题）
+
+结合 `kern/mm/default_pmm.c`，First-Fit 的处理过程如下：
+
+1. **建立管理结构：** `default_init()` 初始化空闲链表 `free_list`，并将空闲页总数 `nr_free` 置零。
+2. **登记空闲页：** `default_init_memmap(base, n)` 清除这段可用页面的保留状态、原有块信息和引用计数，在块首页用 `property = n` 记录连续页数并设置 `PageProperty` 标志，再将块首页按地址升序插入空闲链表，增加空闲页总数。
+3. **分配连续页：** `default_alloc_pages(n)` 从链表头开始查找，遇到第一个连续页数不少于 `n` 的块就分配其前 `n` 页；若有剩余，将余下部分作为新空闲块留在原位置。随后减少空闲页总数并清除已分配块首页的 `PageProperty` 标志。总空闲页不足或没有足够大的连续块时返回 `NULL`。
+4. **回收与合并：** `default_free_pages(base, n)` 重置页面状态和引用计数，登记释放块并按地址插回链表，增加空闲页总数。随后分别检查前后空闲块，若物理地址连续就合并，更新块长度并移除多余的块首节点。合并只改变空闲块的组织，不再次增加空闲页总数。
+
+**原有 First-Fit 是否还有改进空间？**
+
+有。当前分配和释放时的查找最坏都需要线性遍历，链表前部还可能积累较多小空闲块。可以使用按地址组织、维护子树最大空闲块长度的平衡树，加速查找首个合适块和释放时的定位。若允许调整分配策略，也可以采用 Next-Fit，从上次查找位置继续扫描，减少反复扫描链表前部。原实现已经支持相邻块合并，改进时应保留；调整查找策略也不能保证消除外部碎片。
+
+### 任务二：Best-Fit 物理页分配
 
 **负责人：** 2413124-梁昊
 
@@ -396,11 +445,10 @@ const struct pmm_manager buddy_pmm_manager;
 
 ---
 
-### 练习：[练习标题]
+### 分支任务：gdb调试页表查询过程
 
-**负责人：** [学号-姓名]
+**负责人：** 2410550-杨博
 
-[按照练习的具体要求进行解答]
 
 ---
 
