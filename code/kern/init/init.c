@@ -39,6 +39,11 @@ int kern_init(void) {
     // grade_backtrace();
     pmm_init();  // init physical memory management
 
+#ifdef BUDDY_TEST
+    extern void buddy_test(void);
+    buddy_test();
+#endif
+
     /* do nothing */
     while (1)
         ;

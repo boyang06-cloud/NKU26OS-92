@@ -15,7 +15,7 @@
 |------|----------------|
 | 2411210-王禹博 | 模块一：物理内存初始化功能 |
 | 2410550-杨博   | [练习或模块名称] |
-| 2413124-梁昊   | 模块二：Best-Fit 物理页分配 |
+| 2413124-梁昊   | 模块二：Best-Fit 物理页分配；任务三：Buddy System 提示词设计 |
 
 实验报告如何分工？
 
@@ -271,6 +271,126 @@ const struct pmm_manager best_fit_pmm_manager;
 后可以正常启动。
 
 另外，`entry.S` 的启动页表原本只映射了 `0xFFFFFFFFC0000000` 以上的虚拟地址。内核入口实际从物理地址 `0x80200000` 开始执行，执行 `csrw satp` 后，下一条指令的取指仍发生在物理地址 `0x80200038`；该地址没有映射就会触发取指缺页（GDB 里 `scause = 12`）。因此在启动页表中补了一条 `0x80000000 - 0xBFFFFFFF` 的恒等映射，开分页瞬间和之后的高地址映射都能正常执行。该改动不改变页表大小，也不影响 `page_init` 对物理内存的统计。
+
+---
+
+### 任务三：Buddy System 分配算法（提示词设计）
+
+**负责人：** 2413124-梁昊
+
+本任务不提供代码框架和测试函数。下面两份提示词分别用于生成分配模块和对应的测试函数；生成的代码已经接入 `pmm_manager` 框架，并在内核中实际编译运行通过。
+
+#### 实现概述
+
+- 新增 `kern/mm/buddy_pmm.c` 和 `kern/mm/buddy_pmm.h`，导出 `buddy_pmm_manager`；
+- 取 `MAX_ORDER = 10`，阶 k 的块大小为 2^k 页；
+- 每个阶维护一条空闲链表；块首的 `Page.property` 记录阶号，`PageProperty()` 标记它是空闲块首；
+- `init_memmap` 把一段连续内存按“尽量大、且相对 zone 起始地址对齐”的 2 的幂块分解后挂到对应阶；
+- 分配时把页数向上取整到 2 的幂，从最小可用阶开始逐级对半拆分；
+- 释放时整块归还，并循环与同阶 buddy 合并，直到不能合并；
+- 新增 `kern/mm/buddy_test.c`，通过 `-DBUDDY_TEST` 编译选项在 `pmm_init()` 之后运行自测。
+
+#### 提示词一：生成 Buddy System 分配模块
+
+````markdown
+[PROMPT]
+在 riscv64-ucore 的 lab2 代码中，从零实现一个 Buddy System 物理页分配器，并接入现有的
+pmm_manager 框架。现有框架中：kern/mm/pmm.h 定义 struct pmm_manager 的函数指针；
+kern/mm/default_pmm.c 和 best_fit_pmm.c 是参考实现；kern/mm/memlayout.h 定义 struct Page、
+free_area_t、PageReserved/PageProperty 等；kern/mm/pmm.c 的 init_pmm_manager() 负责选择管理器。
+请以当前项目源码为准，不要套用其他版本 uCore 的实现。
+
+[RELY]
+- struct Page 的字段：ref、flags、property、page_link
+- PageReserved / PageProperty / SetPageProperty / ClearPageProperty
+- list_init / list_add / list_del / list_empty / list_next / list_prev / le2page
+- struct pmm_manager 的六个函数指针签名
+- cprintf、assert
+
+[GUARANTEE]
+新增 kern/mm/buddy_pmm.c 和 kern/mm/buddy_pmm.h，导出：
+const struct pmm_manager buddy_pmm_manager;
+实现 init、init_memmap、alloc_pages、free_pages、nr_free_pages、check 六个函数。
+不修改 default_pmm.c、best_fit_pmm.c 的算法，也不修改模块一的 page_init()。
+
+[SPECIFICATION]
+1. 支持 MAX_ORDER（取 10）个阶，阶 k 的块大小为 2^k 页；每个阶维护一条空闲链表和一个空闲页计数。
+2. init_memmap(base, n)：把 [base, base+n) 按“尽量大的、且相对 zone 起始地址对齐的 2 的幂块”
+   分解后挂到对应阶的空闲链表；只有块首设置 Property，property 存阶号。
+3. alloc_pages(n)：把 n 向上取整到 2^k；从 k 阶开始找第一个非空链表，若没有则向更高阶找；
+   找到后逐级对半拆分，把另一半挂回低阶；返回块首；若超过 MAX_ORDER 仍无可用块返回 NULL。
+4. free_pages(base, n)：把 n 向上取整到 2^k 后整块归还；插入对应阶链表后，循环检查 buddy
+   是否同阶且空闲，可以合并则向上升阶，直到不能合并。
+5. buddy 地址用“相对 zone 起始的页号异或 (1 << order)”计算；合并前必须检查 buddy 在 zone
+   范围内，并且确实是同阶空闲块首，避免把更大空闲块内部的页误判成 buddy。
+6. nr_free_pages 返回所有阶空闲页数之和；check 遍历各阶链表，验证每个块首都有 Property、
+   property 等于所在阶，且按块统计的总页数与 nr_free 一致。
+7. 代码需能在 -march=rv64gc -mabi=lp64d -Werror 下编译通过。
+
+请说明：
+- 每个函数的边界条件；
+- 拆分和合并时 nr_free 分别如何变化；
+- 如何保证合并后的块仍然对齐。
+````
+
+#### 提示词二：生成测试函数
+
+````markdown
+[PROMPT]
+为刚生成的 buddy_pmm.c 设计一套可以在内核里直接运行的自测函数 buddy_test()。
+不依赖 tools/inject.py 和 tools/grade.sh，直接编译进内核并打印每个用例的结果。
+
+[RELY]
+- buddy_pmm_manager 的六个函数指针
+- struct Page 的 property、flags、page_link 字段
+- cprintf、assert
+- 一块静态的 struct Page 数组（例如 1024 页）作为测试用 zone，不占用真实物理内存
+
+[GUARANTEE]
+新增 kern/mm/buddy_test.c，导出 void buddy_test(void);
+测试不修改 buddy 算法本身；每个用例开始前重新初始化测试 zone。
+
+[SPECIFICATION]
+至少覆盖以下用例：
+1. 初始化：1024 页全部空闲，整块分配 1024 页应返回 zone 首页，释放后恢复到 1024 页。
+2. 精确分配：alloc(1) 返回 zone 首页，nr_free 减少 1；释放后恢复到 1024。
+3. 非 2 的幂：alloc(3) 按 4 页分配，nr_free 减少 4；释放后恢复。
+4. 相邻分配：连续两次 alloc(1) 返回相邻的两页。
+5. 合并：分配两个 4 页块，按相反顺序释放，应逐级合并；之后 alloc(8) 能拿到块首。
+6. 边界：alloc(1025) 返回 NULL；alloc(1024) 成功；再 alloc(1) 返回 NULL。
+7. 外部碎片：在 4 页 zone 中分配 4 个单页，释放第 1、3 个后 alloc(2) 应失败，
+   因为两个空闲页不是 buddy；释放第 2、4 个后 alloc(2) 应成功。
+8. 每个用例打印 PASS/FAIL，最后打印通过数/总数；全部通过时打印
+   "Buddy System: ALL TESTS PASSED"。
+
+请说明每个用例验证了 buddy 的哪条性质，以及哪些用例能区分 buddy 与 first-fit/best-fit。
+````
+
+#### 测试覆盖说明
+
+| 用例 | 覆盖的核心行为或边界 |
+|---|---|
+| 1–3 | 初始化分解、整块分配、整块释放 |
+| 4–6 | 单页分配的返回值与 `nr_free` 精确计数 |
+| 7–9 | 请求页数不是 2 的幂时向上取整 |
+| 10–11 | 连续分配得到相邻页，释放后能合回 |
+| 12–14 | 两个 4 页块按相反顺序释放时逐级合并 |
+| 15–18 | 超过 `MAX_ORDER`、占满整个 zone、耗尽后再分配 |
+| 19–21 | 外部碎片：非 buddy 的空闲页不能合并，补齐 buddy 后可以合并 |
+
+这些测试之所以有效，原因有几点：
+
+1. 用例直接调用 `buddy_pmm_manager` 的函数指针，绕开 `pmm.c` 的分发层，能单独验证算法本身；
+2. 同时检查返回值地址、`nr_free_pages()` 的增减和分配结果是否相邻，可以发现“能分配但计数错误”“合并方向错误”这类问题；
+3. 第 20 条是 buddy 与 first-fit/best-fit 的关键区别：两个空闲页不是 buddy 时不能拼成 2 页块，best-fit 会直接分配，而 buddy 必须返回 NULL；
+4. 第 15、17 条覆盖失败路径，避免实现只处理成功情况；
+5. 每个用例前都重新初始化独立的 1024 页静态 zone，不依赖真实物理内存，也不会破坏 best_fit 的状态。
+
+**测试截图：**
+
+![Buddy System 编译结果](./images/buddy_build.png)
+
+![Buddy System 测试结果](./images/buddy_test.png)
 
 ---
 
