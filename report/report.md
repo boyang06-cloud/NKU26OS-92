@@ -38,7 +38,7 @@
 | 成员 | AI 编程工具 | 底层模型 | 备注 |
 |------|------------|---------|------|
 | 2411210-王禹博 | Codex | GPT-6.1 sol|
-| 2410550-杨博 | Codex | GPT-6 | SLUB 分配模块与测试 |
+| 2410550-杨博 | Codex | GPT-6 |  
 | 2413124-梁昊 | Claude Code（VS Code 扩展） | Claude | |
 
 SLUB 模块的集成验证使用 RISC-V 64 位目标环境，交叉编译器为 `riscv64-unknown-elf-gcc 15.1.0`，QEMU 版本为 `4.1.1`，启动日志显示 OpenSBI 版本为 `0.4`。使用工程默认的 GNU99 编译配置和 `make qemu` 启动方式，QEMU 提供 128 MiB 物理内存。模块二组员所使用的另一套环境及其适配过程保留在对应模块中。
@@ -449,6 +449,16 @@ const struct pmm_manager buddy_pmm_manager;
 
 **负责人：** 2410550-杨博
 
+本任务使用两个 GDB 分别控制宿主机上的 QEMU 进程和模拟器中的 uCore，观察访存时的 TLB 查询、页表遍历及地址转换。操作步骤如下：
+
+1. **准备调试版 QEMU。** 在 QEMU 4.1.1 源码目录中执行 `make distclean`，再执行 `./configure --target-list=riscv32-softmmu,riscv64-softmmu --enable-debug` 和 `make -j$(nproc)`。编译后直接使用 `riscv64-softmmu/qemu-system-riscv64`，不执行 `make install`。内核 Makefile 中的 `QEMU` 应指向该调试版程序；本工程已配置为 `/home/oliver/qemu-4.1.1/riscv64-softmmu/qemu-system-riscv64`。
+2. **终端一启动模拟器。** 在 `code/` 目录执行 `make debug`。其中 `-s` 开启 1234 端口的 GDB stub，`-S` 使模拟 CPU 暂停，等待调试器控制。
+3. **终端二调试 QEMU。** 用 `pgrep -af qemu-system-riscv64` 确认本次 QEMU 的 PID，再使用宿主机普通 GDB 加载调试版 QEMU 并执行 `attach <PID>`。设置 `handle SIGPIPE nostop noprint pass`，避免因该信号反复中断，然后执行 `continue`，使 QEMU 能够处理另一个 GDB 的连接。此时先不设置 MMU 断点。
+4. **终端三调试 uCore。** 在 `code/` 目录执行 `make gdb`，使用 `riscv64-unknown-elf-gdb` 连接 `localhost:1234`。可在 `kern_init` 设置断点并继续，利用 `disassemble`、`x/i $pc` 和寄存器信息，找到虚拟内存模式下的一条访存指令，在执行前暂停，确定它访问的虚拟地址。
+5. **设置 QEMU 侧断点并触发访存。** 在终端二按 `Ctrl+C` 暂停 QEMU，在 `riscv_cpu_tlb_fill` 或 `get_physical_address` 设置断点，再执行 `continue`。随后在终端三使用 `si` 执行目标指令。若该地址的转换需要补填 TLB，宿主 GDB 就会命中相应断点；已命中的 TLB 访问不会进入页表遍历函数，不能据此认为断点失效。
+6. **单步观察转换过程。** 在终端二跟踪 `get_physical_address()`，观察 `satp` 中的页表基址、SV39 虚拟页号索引、读取的页表项及最终叶子项，核对得到的物理地址；若是大页，遍历可以在较高层叶子项结束。成功后继续跟踪 `tlb_set_page()`，观察转换结果写入软件 TLB。宿主 GDB 执行 `continue` 后，终端三中的单步操作才能完成，随后可以继续控制内核。
+
+还可以简化为按地址调试：预先确定一个即将首次访问的虚拟地址，例如内核 C 入口地址，在宿主 GDB 设置 `break get_physical_address if addr == <目标虚拟地址>`，然后让内核运行。这样可直接停在该地址的翻译过程，无需逐条寻找访存指令。这里的条件判断使用 QEMU 函数参数，目标地址应以当前内核符号和实际访问为准。
 
 ---
 
