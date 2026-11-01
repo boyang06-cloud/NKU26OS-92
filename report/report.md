@@ -448,6 +448,624 @@ const struct pmm_manager buddy_pmm_manager;
 ### 分支任务：gdb调试页表查询过程
 
 **负责人：** 2410550-杨博
+#### 一、任务目标
+
+本任务主要通过 GDB 调试 QEMU 4.1.1 源码，观察 RISC-V 虚拟地址转换为物理地址的具体过程，理解操作系统启用分页机制后，CPU 如何通过页表完成地址翻译，以及 QEMU 如何模拟这一过程。
+
+本次调试主要完成以下内容：
+
+1. 使用 GDB 分别连接 QEMU 和 uCore 内核，建立双层调试环境。
+2. 在 uCore 的 `kern_init()` 处设置断点，观察内核启动时的分页状态。
+3. 在 QEMU 的 `get_physical_address()` 函数处设置断点，捕获内核访问虚拟地址时触发的地址翻译过程。
+4. 通过 GDB 查看函数调用栈，梳理从内存写入操作到 QEMU 地址翻译函数的调用关系。
+5. 结合 QEMU 源码，分析 Sv39 三级页表的查询过程，理解虚拟地址如何经过页表查询得到对应的物理地址。
+
+本任务不需要修改 QEMU 的地址翻译算法，而是通过调试现有源码理解其内部执行流程。
+
+#### 二、实验环境与调试工具
+
+本次实验使用 RISC-V 64 位 uCore 内核，借助 QEMU 模拟器运行，并通过 GDB 对内核及 QEMU 本身进行调试。
+
+| 项目 | 使用环境 |
+|---|---|
+| 操作系统 | WSL Ubuntu |
+| 模拟器 | QEMU 4.1.1 |
+| 调试工具 | GNU GDB |
+| 目标架构 | RISC-V 64 位 |
+| 地址转换机制 | Sv39 分页机制 |
+
+**三个终端的分工：**
+
+| 终端 | 作用 | 主要操作 |
+|---|---|---|
+| 终端 1 | 启动 QEMU | 执行 `make debug`，运行 uCore |
+| 终端 2 | 调试 QEMU 源码 | 附加 QEMU 进程，观察地址翻译函数 |
+| 终端 3 | 调试 uCore 内核 | 执行 `make gdb`，观察内核启动及分页状态 |
+
+其中，终端 2 和终端 3 分别调试不同的对象：
+
+- 终端 2 调试的是运行在宿主机上的 QEMU 模拟器程序。
+- 终端 3 调试的是运行在 QEMU 中的 RISC-V uCore 内核。
+
+两者通过 QEMU 提供的 GDB 远程调试接口建立联系。
+
+#### 三、GDB 调试过程
+
+##### 1. 启动 QEMU 模拟环境
+
+首先在终端 1 中进入项目的 `code/` 目录，执行：
+
+```bash
+cd ~/NKUOS/NKU26OS-92/code
+make debug
+```
+
+该命令启动 QEMU，并开放 GDB 远程调试接口。
+
+此时 QEMU 正在运行，等待 GDB 连接。
+
+##### 2. 使用终端 2 附加 QEMU 进程
+
+首先获取 QEMU 的进程号：
+
+```bash
+pgrep -af qemu-system-riscv64
+```
+
+然后启动 GDB：
+
+```bash
+sudo gdb
+```
+
+附加到对应的 QEMU 进程：
+
+```gdb
+attach <QEMU进程PID>
+```
+
+附加成功后，可以在 QEMU 源码中设置断点。
+
+本次调试主要关注两个函数：
+
+```gdb
+break riscv_cpu_tlb_fill
+break get_physical_address
+```
+
+它们分别负责：
+
+- `riscv_cpu_tlb_fill()`：当地址访问需要进行 TLB 填充时，负责进入地址翻译流程。
+- `get_physical_address()`：根据当前页表结构，将虚拟地址翻译为物理地址，并检查访问权限。
+
+通过：
+
+```gdb
+info breakpoints
+```
+
+可以查看断点设置情况。
+
+##### 3. 使用终端 3 调试 uCore 内核
+
+在终端 3 中执行：
+
+```bash
+cd ~/NKUOS/NKU26OS-92/code
+make gdb
+```
+
+连接成功后，在内核初始化函数处设置硬件断点：
+
+```gdb
+hbreak kern_init
+continue
+```
+
+程序运行到 `kern_init()` 后暂停。
+
+此时查看 CPU 的分页控制寄存器：
+
+```gdb
+info registers satp
+```
+
+本次实际得到：
+
+```text
+satp = 0x8000000000080206
+```
+
+该寄存器是 RISC-V 中用于控制地址转换的核心寄存器，其中包含分页模式、地址空间标识符以及根页表的物理页号。
+
+通过该寄存器可以确认当前内核已经进入 Sv39 分页模式。
+
+##### 4. 查看内核虚拟地址及初始化过程
+
+在终端 3 中继续执行：
+
+```gdb
+p/x (uintptr_t)&edata
+p/x (uintptr_t)&end
+```
+
+本次调试得到：
+
+```text
+edata = 0xffffffffc0207018
+end   = 0xffffffffc0209a94
+```
+
+随后查看 `kern_init()` 的反汇编：
+
+```gdb
+x/20i kern_init
+```
+
+可以看到内核启动过程中调用了：
+
+```c
+memset(edata, 0, end - edata);
+```
+
+这条语句的作用是将内核 BSS 段清零。
+
+其中：
+
+- `edata` 是 BSS 段的起始虚拟地址。
+- `end` 是内核镜像结束位置。
+- `end - edata` 表示需要清零的内存长度。
+
+因此，内核执行 `memset()` 时，会对虚拟地址 `0xffffffffc0207018` 开始的内存区域进行写入。
+
+这就为我们观察虚拟地址转换提供了一个实际的触发点。
+
+##### 5. 在 QEMU 中捕获虚拟地址翻译过程
+
+回到终端 2，在 QEMU 的 GDB 中查看断点：
+
+```gdb
+info breakpoints
+```
+
+找到 `get_physical_address()` 对应的断点编号。
+
+为了只观察目标地址的写入操作，可以设置条件断点：
+
+```gdb
+condition <断点编号> addr == 0xffffffffc0207018 && access_type == 1
+```
+
+如果断点此前被禁用，需要重新启用：
+
+```gdb
+enable <断点编号>
+```
+
+然后执行：
+
+```gdb
+continue
+```
+
+回到终端 3，继续执行内核：
+
+```gdb
+continue
+```
+
+此时，内核继续执行 `memset()`，QEMU 在模拟内存写入时触发地址翻译函数。
+
+本次调试成功捕获：
+
+```text
+Thread 2 "qemu-system-ris" hit Breakpoint,
+get_physical_address (...)
+at target/riscv/cpu_helper.c:158
+```
+
+这说明 QEMU 已经进入虚拟地址翻译函数，成功捕获了目标虚拟地址的访问。
+
+##### 6. 查看地址翻译函数的参数和调用栈
+
+断点命中后，在终端 2 中执行：
+
+```gdb
+p/x addr
+p access_type
+p mmu_idx
+p/x env->satp
+bt 8
+```
+
+本次实际得到：
+
+```text
+addr        = 0xffffffffc0207018
+access_type = 1
+mmu_idx     = 1
+satp        = 0x8000000000080206
+```
+
+其中：
+
+- `addr`：本次需要进行翻译的虚拟地址。
+- `access_type`：访问类型，1 对应数据写入操作（`MMU_DATA_STORE`）。
+- `mmu_idx`：QEMU 当前使用的 MMU 地址翻译上下文索引。
+- `satp`：当前 CPU 的地址转换控制寄存器。
+
+通过：
+
+```gdb
+bt 8
+```
+
+得到本次调用的主要函数路径：
+
+```text
+#0 get_physical_address()
+#1 riscv_cpu_tlb_fill()
+#2 tlb_fill()
+#3 store_helper()
+#4 helper_ret_stb_mmu()
+#5 code_gen_buffer()
+#6 cpu_tb_exec()
+#7 cpu_loop_exec_tb()
+```
+
+由此可以看出，内核执行写入操作后，QEMU 的模拟执行模块通过 `store_helper()` 处理内存写入。当需要进行地址翻译时，调用 `tlb_fill()`，进一步进入 RISC-V 专用的 `riscv_cpu_tlb_fill()`，最终调用 `get_physical_address()` 完成地址翻译。
+
+这条调用链展示了 QEMU 从模拟访存操作到执行页表查询的完整入口。
+
+#### 四、虚拟地址到物理地址的转换过程
+
+本部分是本次分支任务的核心。
+
+##### 1. RISC-V Sv39 分页机制
+
+RISC-V 64 位处理器支持多种分页模式，本次实验使用的是 Sv39。
+
+Sv39 表示虚拟地址采用 39 位有效地址结构，使用三级页表完成地址翻译。
+
+其虚拟地址结构如下：
+
+```text
+63                39 38       30 29       21 20       12 11        0
++-------------------+-----------+-----------+-----------+-----------+
+|   符号扩展位      |  VPN[2]   |  VPN[1]   |  VPN[0]   |  Offset   |
++-------------------+-----------+-----------+-----------+-----------+
+                          9 bit       9 bit       9 bit      12 bit
+```
+
+具体来说：
+
+| 字段 | 位数 | 作用 |
+|---|---:|---|
+| VPN[2] | 9 bit | 一级页表索引 |
+| VPN[1] | 9 bit | 二级页表索引 |
+| VPN[0] | 9 bit | 三级页表索引 |
+| Offset | 12 bit | 页内偏移 |
+
+每一级页表有 512 个表项，每个表项占 8 字节。
+
+因为页大小为 4096 字节，所以页内偏移需要 12 位。
+
+三个页表索引分别用于查询三级页表，而页内偏移在地址翻译完成后保持不变（对于普通 4KB 页映射）。
+
+##### 2. 读取 satp，确定根页表位置
+
+在 QEMU 的 `get_physical_address()` 函数中，可以看到以下代码：
+
+```c
+base = get_field(env->satp, SATP_PPN) << PGSHIFT;
+```
+
+该语句的作用是提取 `satp` 中保存的根页表物理页号，并左移 12 位，得到根页表的物理地址。
+
+本次实际读取到：
+
+```text
+satp = 0x8000000000080206
+```
+
+按照 RISC-V Sv39 的 `satp` 格式进行解析：
+
+| 字段 | 数值 | 含义 |
+|---|---|---|
+| MODE | 8 | Sv39 分页模式 |
+| ASID | 0 | 地址空间标识符 |
+| PPN | 0x80206 | 根页表物理页号 |
+
+因此：
+
+```text
+根页表物理地址
+= 0x80206 << 12
+= 0x80206000
+```
+
+也就是说，QEMU 可以从物理地址 `0x80206000` 开始查找一级页表。
+
+##### 3. 将虚拟地址拆分为三级页表索引
+
+本次捕获的虚拟地址为：
+
+```text
+0xffffffffc0207018
+```
+
+根据 Sv39 的地址结构，可以将其拆分为三个页表索引和一个页内偏移：
+
+| 字段 | 计算结果 | 含义 |
+|---|---|---|
+| VPN[2] | 0x1ff | 一级页表索引 |
+| VPN[1] | 0x001 | 二级页表索引 |
+| VPN[0] | 0x007 | 三级页表索引 |
+| Offset | 0x018 | 页内偏移 |
+
+因此，页表查询并不是直接将整个虚拟地址转换为物理地址，而是将虚拟地址拆分为三个索引和一个页内偏移，逐级查找页表。
+
+##### 4. 逐级查询页表项（PTE）
+
+在 QEMU 的 `get_physical_address()` 函数中，可以看到如下代码：
+
+```c
+int ptshift = (levels - 1) * ptidxbits;
+
+for (i = 0; i < levels; i++, ptshift -= ptidxbits) {
+    target_ulong idx = (addr >> (PGSHIFT + ptshift)) &
+                       ((1 << ptidxbits) - 1);
+
+    target_ulong pte_addr = base + idx * ptesize;
+
+    target_ulong pte = ldq_phys(cs->as, pte_addr);
+
+    target_ulong ppn = pte >> PTE_PPN_SHIFT;
+}
+```
+
+这段代码就是三级页表查询的核心。
+
+结合 Sv39 的参数：
+
+```text
+levels    = 3
+ptidxbits = 9
+ptesize   = 8
+PGSHIFT   = 12
+```
+
+`ptshift` 初始值为：
+
+```text
+ptshift = (3 - 1) * 9 = 18
+```
+
+因此，循环会依次使用：
+
+```text
+第一级：ptshift = 18
+第二级：ptshift = 9
+第三级：ptshift = 0
+```
+
+每次循环主要完成以下操作：
+
+**第一步：计算当前级页表索引。**
+
+```c
+target_ulong idx = (addr >> (PGSHIFT + ptshift)) &
+                   ((1 << ptidxbits) - 1);
+```
+
+该语句从虚拟地址中提取当前级对应的 9 位索引。
+
+本次三个索引分别是：
+
+```text
+第一级：0x1ff
+第二级：0x001
+第三级：0x007
+```
+
+**第二步：计算当前页表项的物理地址。**
+
+```c
+target_ulong pte_addr = base + idx * ptesize;
+```
+
+其中：
+
+- `base`：当前级页表的物理基地址。
+- `idx`：当前级页表索引。
+- `ptesize`：每个页表项的大小，为 8 字节。
+
+例如，第一次查询：
+
+```text
+base     = 0x80206000
+idx      = 0x1ff
+ptesize  = 8
+
+pte_addr = 0x80206000 + 0x1ff * 8
+         = 0x80206ff8
+```
+
+这就是第一级页表中对应表项的物理地址。
+
+**第三步：读取页表项。**
+
+```c
+target_ulong pte = ldq_phys(cs->as, pte_addr);
+```
+
+`ldq_phys()` 是 QEMU 提供的物理内存读取接口，用于从指定的物理地址读取 8 字节数据。
+
+读取的数据就是当前页表项 PTE。
+
+**第四步：解析 PTE 中的物理页号。**
+
+```c
+target_ulong ppn = pte >> PTE_PPN_SHIFT;
+```
+
+该语句从 PTE 中提取物理页号 PPN。
+
+如果当前 PTE 是指向下一级页表的非叶子节点，则执行：
+
+```c
+base = ppn << PGSHIFT;
+```
+
+将该 PTE 中的物理页号转换为下一级页表的物理基地址，继续下一轮查询。
+
+如果当前 PTE 是叶子节点，则说明已经找到实际的物理页映射，可以进行最终地址计算。
+
+##### 5. 判断页表项是否合法以及检查访问权限
+
+并不是读取到 PTE 就意味着地址翻译成功，还需要检查页表项中的标志位。
+
+在 QEMU 源码中，可以看到以下判断：
+
+```c
+if (!(pte & PTE_V)) {
+    return TRANSLATE_FAIL;
+} else if (!(pte & (PTE_R | PTE_W | PTE_X))) {
+    base = ppn << PGSHIFT;
+} else if ((pte & (PTE_R | PTE_W | PTE_X)) == PTE_W) {
+    return TRANSLATE_FAIL;
+} else if ((pte & (PTE_R | PTE_W | PTE_X)) ==
+           (PTE_W | PTE_X)) {
+    return TRANSLATE_FAIL;
+}
+```
+
+这些判断主要用于：
+
+1. 检查 PTE 是否有效，`PTE_V` 为 0 时说明页表项无效。
+2. 如果 R、W、X 均为 0，则说明当前 PTE 是指向下一级页表的非叶子节点。
+3. 如果 PTE 只有写权限而没有读或执行权限，则属于保留的非法组合。
+4. 如果 PTE 同时具有写和执行权限，也属于非法组合。
+
+除此之外，源码还会检查用户态和内核态的访问权限、页号对齐情况以及当前访问类型是否满足页表项的权限要求。
+
+本次调试中：
+
+```text
+access_type = 1
+```
+
+表示当前操作是数据写入，因此最终映射必须允许写操作。
+
+这些检查可以防止访问无效页、越权访问以及不符合分页规范的地址映射。
+
+##### 6. 根据叶子页表项计算最终物理地址
+
+当查询到有效的叶子页表项后，就可以根据其中的物理页号和虚拟地址的页内偏移计算物理地址。
+
+对于普通 4KB 页面：
+
+```text
+物理地址 = PPN * PGSIZE + Offset
+```
+
+也就是：
+
+```text
+PA = (PPN << 12) | Offset
+```
+
+本次调试的页内偏移为：
+
+```text
+Offset = 0x018
+```
+
+因此，如果最终查找到的叶子页表项中的物理页号为 `PPN`，则：
+
+```text
+PA = (PPN << 12) | 0x018
+```
+
+需要注意，Sv39 还支持 2MB 和 1GB 的大页映射。如果叶子节点出现在前两级页表中，就需要将虚拟地址中相应的低位 VPN 一并作为物理地址的一部分。QEMU 源码中的 PPN 对齐检查就是为了保证这类映射符合规范。
+
+至此，虚拟地址到物理地址的转换完成。
+
+随后 QEMU 将翻译结果填入 TLB，后续访问相同映射时，在 TLB 命中的情况下可以直接使用缓存的地址映射，不必每次重新遍历三级页表。
+
+##### 7. 地址转换整体流程
+
+本次实验观察到的虚拟地址转换流程可以总结为：
+
+```text
+内核发起虚拟地址访问
+        |
+        v
+memset(edata, 0, end - edata)
+        |
+        v
+QEMU 模拟访存操作
+        |
+        v
+store_helper()
+        |
+        v
+tlb_fill()
+        |
+        v
+riscv_cpu_tlb_fill()
+        |
+        v
+get_physical_address()
+        |
+        v
+读取 satp，确定根页表物理地址
+        |
+        v
+拆分虚拟地址
+VPN[2] | VPN[1] | VPN[0] | Offset
+        |
+        v
+查询一级页表
+        |
+        v
+查询二级页表
+        |
+        v
+查询三级页表
+        |
+        v
+检查 PTE 有效性及访问权限
+        |
+        v
+提取叶子页表项中的物理页号 PPN
+        |
+        v
+计算最终物理地址
+PA = (PPN << 12) | Offset
+        |
+        v
+填充 TLB，完成访存
+```
+
+#### 五、调试结果与分析
+
+##### 1. 实际调试结果
+
+本次实验成功完成了 QEMU 和 uCore 的双层 GDB 调试，并捕获到实际地址翻译过程。
+
+| 调试项目 | 实际结果 |
+|---|---|
+| 内核断点 | 成功停在 `kern_init()` |
+| 分页模式 | Sv39 |
+| satp | `0x8000000000080206` |
+| 根页表物理地址 | `0x80206000` |
+| 内核虚拟地址 | `0xffffffffc0207018` |
+| 内核结束地址 | `0xffffffffc0209a94` |
+| 地址翻译函数 | `get_physical_address()` |
+| 访问类型 | `1`，数据写入 |
+| MMU 索引 | `1` |
+| QEMU 调用栈 | 成功观察到 TLB 填充及地址翻译调用路径 |
 
 本任务使用两个 GDB 分别控制宿主机上的 QEMU 进程和模拟器中的 uCore，观察访存时的 TLB 查询、页表遍历及地址转换。操作步骤如下：
 
