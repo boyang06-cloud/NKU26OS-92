@@ -85,3 +85,83 @@ struct trapframe、trap() 签名及模块二代码。
   在入口栈原本满足 16 字节对齐时，调用 C 函数仍保持对齐。
 - 不修改 SAVE_ALL，也不实现模块二的异常或中断处理逻辑。
 ```
+
+# 模块二最终提示词
+```
+[PROMPT]
+
+**任务**：
+完成 lab3 的“中断与异常处理功能”。
+目标文件为 kern/trap/trap.c，仅补齐 interrupt_handler 和
+exception_handler，替换标有“lab3 function2 YOUR CODE”的位置。
+
+**操作要求**：
+保留现有代码和实验标记，不修改 trap()、trap_dispatch()、
+print_trapframe()、struct trapframe、trapentry.S 及模块一代码。
+
+**输出要求**：
+给出两个函数的完整实现，说明 cause 的判断方式、时钟重装、
+ticks 统计、关机条件、epc 调整依据；
+给出 Test 1/2/3 的验证方法。
+
+[RELY]
+
+- trapframe 见 kern/trap/trap.h：gpr、status、epc、badvaddr、cause。
+- scause 最高位（bit 63）为 1 表示中断，其余位为原因编号。
+- 宏定义：IRQ_S_SOFT=1、IRQ_S_TIMER=5、IRQ_S_EXT=9、
+  CAUSE_ILLEGAL_INSTRUCTION=2、CAUSE_BREAKPOINT=3。
+- TICK_NUM=100；ticks 是 clock.h 中的 volatile size_t。
+- clock_set_next_event() 用于设置下一次时钟事件；
+  print_ticks() 已实现；sbi_shutdown() 在 libs/sbi.h 中。
+- 异常返回地址由 tf->epc 决定，返回前由模块一恢复 sepc。
+- 指令可能是 32 位或 16 位压缩指令，低两位为 0b11 表示 32 位。
+- SHUTDOWN_AFTER 实验框架未定义，需要在 trap.c 中补充。
+- 未列出的中断或异常只要求用 print_trapframe(tf) 兜底。
+
+[GUARANTEE]
+
+必须实现：
+1. void interrupt_handler(struct trapframe *tf);
+2. void exception_handler(struct trapframe *tf);
+不修改函数签名，不新增公开接口或其他模块功能。
+
+[SPECIFICATION]
+
+## interrupt_handler
+
+**Pre-Condition**：
+- tf 指向合法的 trapframe。
+- 通过 trap_dispatch 调用时 cause 最高位为 1；
+  测试代码也可能直接传入正数 cause。
+
+**Post-Condition**：
+- IRQ_S_TIMER：重装下一次时钟事件，ticks 加一；
+  每 TICK_NUM 次输出一次统计；达到 SHUTDOWN_AFTER 次统计后关机。
+- IRQ_S_SOFT：输出“Supervisor software interrupt”。
+- IRQ_S_EXT：输出“Supervisor external interrupt”。
+- 其他：输出“Unknown interrupt: cause N”，并调用 print_trapframe(tf)。
+
+**Requirements**：
+- 判断前先用 cause &= ~(1UL << 63) 去掉中断标志位，
+  不能只依赖有符号数判断。
+- 时钟中断必须重装定时器，否则系统只能收到一次时钟中断。
+- ticks 每收到一次时钟中断加一，统计输出不得改变递增规则。
+- 关机只在第 SHUTDOWN_AFTER 次统计输出后执行。
+
+## exception_handler
+
+**Pre-Condition**：
+- tf 有效，cause 为异常编号，最高位为 0。
+
+**Post-Condition**：
+- CAUSE_ILLEGAL_INSTRUCTION：输出“Illegal instruction at 0x...”，
+  并把 epc 前进一条指令的长度。
+- CAUSE_BREAKPOINT：输出“Breakpoint at 0x...”，
+  并把 epc 前进一条指令的长度。
+- 其他：调用 print_trapframe(tf)。
+
+**Requirements**：
+- 读取 epc 处指令的最低两位：0b11 为 4 字节，否则为 2 字节。
+- 不得统一按 4 字节推进，否则遇到压缩指令会跳到错误位置。
+- 输出格式必须与实验评测检查的字符串一致。
+```
