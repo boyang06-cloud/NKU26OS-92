@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "name": "ucore RISC-V",
+            "compilerPath": "/opt/riscv/riscv64-unknown-elf-toolchain-10.2.0-2020.12.8-x86_64-linux-ubuntu14/bin/riscv64-unknown-elf-gcc",
+            "compilerArgs": [
+                "-mcmodel=medany",
+                "-nostdinc",
+                "-fno-builtin"
+            ],
+            "includePath": [
+                "${workspaceFolder}/code/libs",
+                "${workspaceFolder}/code/kern/debug",
+                "${workspaceFolder}/code/kern/driver",
+                "${workspaceFolder}/code/kern/trap",
+                "${workspaceFolder}/code/kern/mm",
+                "${workspaceFolder}/code/kern/libs",
+                "${workspaceFolder}/code/kern/sync"
+            ],
+            "cStandard": "gnu99"
+        }
+    ],
+    "version": 4
+}
