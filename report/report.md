@@ -468,7 +468,11 @@ Unknown interrupt: cause 15
   cause    0x00000014
 [Test 2] Illegal instruction return: PASS (25/25)
 100 ticks
+100 ticks
 [Test 3] Sustained supervisor timer: PASS (40/40, ticks=200)
+100 ticks
+100 ticks
+100 ticks
 Total Score: 100/100
 ```
 
