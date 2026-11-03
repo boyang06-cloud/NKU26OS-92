@@ -87,6 +87,232 @@
 每个功能模块或者练习中可能包含多项任务，请根据实际情况调整
 -->
 
+### 功能模块：Trap 上下文恢复与 Trap 入口功能
+
+**负责人：** 2411210-王禹博
+
+#### 模块功能描述
+
+**需要实现/修改的函数：**
+
+本模块需要实现的是汇编宏和入口标签，均位于 `kern/trap/trapentry.S`：
+
+```asm
+# 恢复 Trap 上下文的汇编宏
+.macro RESTORE_ALL
+.endm
+
+# Trap 统一入口
+__alltraps:
+```
+
+本模块需要对接以下已有 C 函数，保持其签名不变：
+
+```c
+void trap(struct trapframe *tf);
+```
+
+**功能说明：**
+
+本模块负责 Trap 处理过程中的底层上下文恢复，以及汇编入口与 C 语言处理函数之间的调用衔接，形成以下执行流程：
+
+```text
+发生 Trap
+→ __alltraps
+→ SAVE_ALL 保存上下文
+→ trap(tf) 进行 C 语言处理
+→ __trapret
+→ RESTORE_ALL 恢复上下文
+→ sret 返回原执行流
+```
+
+框架提供的 `SAVE_ALL` 已将通用寄存器及相关 CSR 保存到当前内核栈上的 Trap frame 中。本模块需要完成以下功能：
+
+1. 在 `__alltraps` 中，将当前 Trap frame 的地址作为参数传递给 `trap()`。
+2. 在 `RESTORE_ALL` 中，按照既有保存布局恢复通用寄存器、`sstatus` 和 `sepc`。
+3. 在恢复完成后，衔接框架已有的 `sret` 指令，返回被打断的执行流。
+
+本模块需要正确处理 Trap 发生前的栈指针。`SAVE_ALL` 在第 2 槽保存的是分配 Trap frame 之前的原始 `sp`，因此必须在其他寄存器恢复完成后，最后恢复 `sp`，避免后续加载使用错误的基址。
+
+模块一负责上下文管理；模块二负责中断分类、时钟处理、异常信息输出及异常返回地址调整。模块一直接恢复 C 语言处理完成后的 `tf->epc`，不自行判断异常指令长度或增加返回地址。
+
+#### 最终提示词
+
+以下提示词根据本次最终实现整理，可用于复现模块一的实现：
+
+````markdown
+[PROMPT]
+
+**任务**：
+完成 lab3 的“Trap 上下文恢复与 Trap 入口功能”。
+目标文件为 kern/trap/trapentry.S，仅补齐 RESTORE_ALL 和
+__alltraps 中标有“lab3 function1 YOUR CODE”的位置。
+
+**操作要求**：
+保留现有代码和实验标记，不修改 SAVE_ALL、__trapret 的既有返回逻辑、
+struct trapframe、trap() 签名及模块二代码。
+
+**输出要求**：
+分别给出 RESTORE_ALL 和 __alltraps 的完整实现，
+解释寄存器恢复顺序、参数传递和 Trap 返回机制。
+验证结果必须区分汇编编译、独立上下文测试和完整 lab3 评分。
+
+[RELY]
+
+- 目标平台为 RV64，REGBYTES 为 8；使用工程提供的 LOAD、STORE 宏。
+- SAVE_ALL 已在当前内核栈上建立 Trap frame：
+  - 第 0～31 槽依次对应 x0～x31；
+  - 第 32 槽为 status，对应 sstatus；
+  - 第 33 槽为 epc，对应 sepc；
+  - 第 34 槽为 badvaddr；
+  - 第 35 槽为 cause。
+- 每个槽占 REGBYTES 字节。
+- SAVE_ALL 完成后，sp 指向 Trap frame 起始地址。
+- 第 2 槽保存的是分配 Trap frame 之前的原始 sp，
+  由 SAVE_ALL 经 sscratch 间接取得；此时 sscratch 已清零。
+- 框架提供接口：
+  void trap(struct trapframe *tf);
+- RISC-V 调用约定使用 a0 传递第一个参数，
+  C 函数正常返回时应恢复调用前的 sp。
+- __trapret 已包含 RESTORE_ALL 和 sret。
+- sret 根据 sepc 返回，并依据 sstatus 中的 SPP、SPIE 等字段
+  完成特权级和中断使能状态的转换。
+
+[GUARANTEE]
+
+必须补齐：
+1. 汇编宏 RESTORE_ALL。
+2. 汇编入口 __alltraps 中 SAVE_ALL 之后的 C 函数调用部分。
+
+不新增公开接口、辅助函数、全局变量或其他模块功能。
+
+[SPECIFICATION]
+
+## RESTORE_ALL
+
+**Pre-Condition**：
+- sp 指向合法、可读的 Trap frame，其布局与 SAVE_ALL 一致。
+- C 语言处理已经完成，frame 中的返回状态可能已被合法修改。
+- 当前处于可以执行相关 CSR 操作的 S 模式。
+
+**Post-Condition**：
+- x1～x31 恢复为 frame 中对应的值，x0 保持恒为零。
+- sstatus 和 sepc 恢复为 frame 中的 status 和 epc。
+- sp 恢复为第 2 槽保存的原始值。
+- 后续 sret 能根据恢复后的状态返回。
+
+**Requirements**：
+- 恢复其他寄存器期间，sp 必须继续指向当前 frame，
+  因此最后恢复 x2；恢复后不得重复增加帧大小。
+- 用于恢复 CSR 的临时寄存器，随后也必须恢复其原值。
+- 不强制改变 SPP，不提前主动开启中断，不自行增加 sepc。
+- badvaddr、cause 仅作为现场信息，不要求写回对应 CSR；
+  不将原始 sp 写回 sscratch。
+
+## __alltraps
+
+**Pre-Condition**：
+- 处理器已进入 Trap 入口，框架的 SAVE_ALL 可以正常执行。
+
+**Post-Condition**：
+- SAVE_ALL 建立的 frame 地址作为第一个参数传入 trap()。
+- trap() 正常返回后，执行流进入既有 __trapret，
+  完成上下文恢复并执行 sret。
+
+**Requirements**：
+- 遵循 RISC-V 调用约定，正确设置第一个参数和函数返回地址。
+- 调用前后保持 frame 可供 RESTORE_ALL 使用。
+- RV64 下 frame 大小为 36×8＝288 字节；
+  在入口栈原本满足 16 字节对齐时，调用 C 函数仍保持对齐。
+- 不修改 SAVE_ALL，也不实现模块二的异常或中断处理逻辑。
+````
+
+#### 实现迭代过程
+
+本模块的代码实现经历了 **1 次迭代**。本次未观察到需要重新生成代码的模块一功能错误。
+
+---
+
+##### 第一次迭代
+
+**实现过程：**
+
+1. **确认 Trap frame 布局。**
+
+   对照 `SAVE_ALL` 和 `struct trapframe`，确认第 0～31 槽保存通用寄存器，第 32～35 槽分别保存 `status`、`epc`、`badvaddr` 和 `cause`。RV64 下每槽占 8 字节，整个 Trap frame 占 288 字节。
+
+2. **实现返回状态恢复。**
+
+   在 `RESTORE_ALL` 中，使用 `t0`、`t1` 临时加载第 32、33 槽，分别写回 `sstatus` 和 `sepc`。随后恢复通用寄存器，使临时寄存器也恢复为原执行流的状态。
+
+3. **实现通用寄存器恢复。**
+
+   按保存偏移恢复 `x1` 和 `x3～x31`。`x0` 恒为零，无需恢复；最后从第 2 槽恢复 `x2(sp)`。恢复原始 `sp` 后不再增加帧大小，避免重复释放栈空间。
+
+4. **建立汇编到 C 函数的调用关系。**
+
+   在 `SAVE_ALL` 后执行：
+
+   ```asm
+   mv a0, sp
+   jal trap
+   ```
+
+   此时 `sp` 指向 Trap frame，因此 `a0` 对应 C 函数参数 `struct trapframe *tf`。`trap()` 返回后，执行流自然进入 `__trapret`，恢复上下文并执行 `sret`。
+
+**验证过程：**
+
+在独立测试副本中编译测试内核，并通过 QEMU 运行框架提供的寄存器上下文测试。
+
+由于验证时模块二尚未实现，测试副本使用临时断点处理函数推进异常返回地址，以便独立检查模块一的保存、调用、恢复和返回流程。
+
+验证内容包括：
+
+- Trap frame 中保存的原始 `sp` 与分配前的栈顶一致。
+- Trap frame 地址满足 16 字节对齐要求。
+- 本次测试 Trap 来自 S 模式。
+- 断点处理返回后，测试覆盖的通用寄存器保持原值。
+- `SAVE_ALL` 保持不变，恢复时使用的寄存器偏移与保存布局一致。
+
+实际测试输出：
+
+```text
+Breakpoint at 0xffffffffc0202eac
+[Test 1] Trap entry and breakpoint return: PASS (35/35)
+```
+
+其中断点地址来自该次测试构建，不作为固定验收值。
+
+**最终结果：**
+
+经过 **1 次迭代**，该模块最终：
+
+- ✅ 汇编代码编译通过。
+- ✅ 独立测试副本中的寄存器上下文与断点返回测试通过。
+- ✅ 保持 `SAVE_ALL`、`struct trapframe` 和 `trap()` 函数签名不变。
+- ✅ 模块一的参数传递、上下文恢复和 Trap 返回流程符合预期。
+
+完整 lab3 的异常处理、持续时钟中断和总评分，需要与模块二集成后验证。
+
+**关键设计点总结：**
+
+1. **以实际保存布局为依据。**  
+   在 `[RELY]` 中明确各槽位含义，保证恢复偏移与 `SAVE_ALL` 一致。
+
+2. **最后恢复栈指针。**  
+   在 `[SPECIFICATION]` 中明确 `sp` 的特殊性，避免提前恢复后继续使用错误的 frame 基址。
+
+3. **正确恢复临时寄存器。**  
+   先利用临时寄存器恢复 CSR，再恢复临时寄存器自身，避免破坏被打断程序的状态。
+
+4. **明确模块职责边界。**  
+   异常类型判断和返回地址调整由模块二完成，模块一只恢复处理后的 `sepc`。
+
+5. **保留 Trap 返回状态。**  
+   不强制修改 `SPP`，也不提前主动开启中断，由 `sret` 根据恢复的状态完成返回。
+
+---
+
 ### 功能模块：[模块名称]
 
 **负责人：** [学号-姓名]
