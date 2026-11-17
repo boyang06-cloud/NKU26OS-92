@@ -296,7 +296,7 @@ struct Page *get_page(pde_t *pgdir, uintptr_t la, pte_t **ptep_store)
     return NULL;
 }
 
-//LAB4 function1 YOUR CODE
+// Lab4 模块一：虚拟内存页操作，学号 2411210
 
 static void page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep)
 {
@@ -324,7 +324,7 @@ int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm)
     bool had_directory = (*pdep & PTE_V) != 0;
     pte_t *ptep = get_pte(pgdir, la, 1);
     if (ptep == NULL) {
-        // get_pte may have allocated the first intermediate page before failing.
+        // get_pte 可能在失败前已分配第一级中间页表，需要回收。
         if (!had_directory && (*pdep & PTE_V)) {
             struct Page *table = pde2page(*pdep);
             *pdep = 0;
@@ -344,7 +344,7 @@ int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm)
         page_ref_inc(page);
     }
 
-    // Sv39 leaf entries need R or X; a writable mapping must also be readable.
+    // Sv39 叶页表项需要读或执行权限，可写时也必须可读。
     if (!(perm & (PTE_R | PTE_X)) || (perm & PTE_W)) {
         perm |= PTE_R;
     }
@@ -406,7 +406,7 @@ static void check_pgdir(void)
     assert((ptep = get_pte(boot_pgdir_va, PGSIZE, 0)) != NULL);
     assert(*ptep & PTE_U);
     assert(*ptep & PTE_W);
-    // Sv39 non-leaf entries must leave U clear.
+    // Sv39 非叶页表项的 U 位必须为 0。
     assert((boot_pgdir_va[0] & (PTE_V | PTE_U)) == PTE_V);
     assert(page_ref(p2) == 1);
 
