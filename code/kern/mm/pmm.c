@@ -263,7 +263,7 @@ pte_t *get_pte(pde_t *pgdir, uintptr_t la, bool create)
         set_page_ref(page, 1);
         uintptr_t pa = page2pa(page);
         memset(KADDR(pa), 0, PGSIZE);
-        *pdep1 = pte_create(page2ppn(page), PTE_U | PTE_V);
+        *pdep1 = pte_create(page2ppn(page), PTE_V);
     }
     pde_t *pdep0 = &((pte_t *)KADDR(PDE_ADDR(*pdep1)))[PDX0(la)];
     if (!(*pdep0 & PTE_V))
@@ -276,7 +276,7 @@ pte_t *get_pte(pde_t *pgdir, uintptr_t la, bool create)
         set_page_ref(page, 1);
         uintptr_t pa = page2pa(page);
         memset(KADDR(pa), 0, PGSIZE);
-        *pdep0 = pte_create(page2ppn(page), PTE_U | PTE_V);
+        *pdep0 = pte_create(page2ppn(page), PTE_V);
     }
     return &((pte_t *)KADDR(PDE_ADDR(*pdep0)))[PTX(la)];
 }
@@ -297,6 +297,62 @@ struct Page *get_page(pde_t *pgdir, uintptr_t la, pte_t **ptep_store)
 }
 
 //LAB4 function1 YOUR CODE
+
+static void page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep)
+{
+    if (*ptep & PTE_V) {
+        struct Page *page = pte2page(*ptep);
+        *ptep = 0;
+        tlb_invalidate(pgdir, la);
+        if (page_ref_dec(page) == 0) {
+            free_page(page);
+        }
+    }
+}
+
+void page_remove(pde_t *pgdir, uintptr_t la)
+{
+    pte_t *ptep = get_pte(pgdir, la, 0);
+    if (ptep != NULL) {
+        page_remove_pte(pgdir, la, ptep);
+    }
+}
+
+int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm)
+{
+    pde_t *pdep = &pgdir[PDX1(la)];
+    bool had_directory = (*pdep & PTE_V) != 0;
+    pte_t *ptep = get_pte(pgdir, la, 1);
+    if (ptep == NULL) {
+        // get_pte may have allocated the first intermediate page before failing.
+        if (!had_directory && (*pdep & PTE_V)) {
+            struct Page *table = pde2page(*pdep);
+            *pdep = 0;
+            tlb_invalidate(pgdir, la);
+            set_page_ref(table, 0);
+            free_page(table);
+        }
+        return -E_NO_MEM;
+    }
+
+    if (*ptep & PTE_V) {
+        if (pte2page(*ptep) != page) {
+            page_remove_pte(pgdir, la, ptep);
+            page_ref_inc(page);
+        }
+    } else {
+        page_ref_inc(page);
+    }
+
+    // Sv39 leaf entries need R or X; a writable mapping must also be readable.
+    if (!(perm & (PTE_R | PTE_X)) || (perm & PTE_W)) {
+        perm |= PTE_R;
+    }
+    *ptep = pte_create(page2ppn(page), perm);
+    tlb_invalidate(pgdir, la);
+    return 0;
+}
+
 
 
 
@@ -350,7 +406,8 @@ static void check_pgdir(void)
     assert((ptep = get_pte(boot_pgdir_va, PGSIZE, 0)) != NULL);
     assert(*ptep & PTE_U);
     assert(*ptep & PTE_W);
-    assert(boot_pgdir_va[0] & PTE_U);
+    // Sv39 non-leaf entries must leave U clear.
+    assert((boot_pgdir_va[0] & (PTE_V | PTE_U)) == PTE_V);
     assert(page_ref(p2) == 1);
 
     assert(page_insert(boot_pgdir_va, p1, PGSIZE, 0) == 0);
