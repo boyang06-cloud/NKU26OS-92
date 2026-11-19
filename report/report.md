@@ -226,7 +226,7 @@ static int copy_mm(uint32_t clone_flags, struct proc_struct *proc);   // kern/pr
 
 本模块把内核从"只能运行一段初始化代码"推进到"能够创建、登记多个内核线程"。
 
-- `alloc_proc` 从堆上分配一个进程控制块，并初始化进程运行所需的字段。PCB 里的指针和状态如果没有显式初始化，后面的代码就可能读到随机值。
+- `alloc_proc` 从堆上分配一个进程控制块，初始化进程状态、上下文和两个链表节点。PCB 里的指针和状态如果没有显式初始化，后面的代码就可能读到随机值。
 - `proc_init` 建立全局进程链表和 PID 哈希表，然后把当前这段执行现场直接登记成 `idleproc`，再通过 `kernel_thread` 创建第一个真正的内核线程 `initproc`。
 - `kernel_thread` 只负责构造一个临时的 trapframe：把线程入口函数和参数分别放进 `s0`、`s1`，把 `epc` 指向 `kernel_thread_entry`，然后交给 `do_fork`。
 - `do_fork` 负责把 PCB、内核栈、PID、链表挂接、就绪状态组合成一个可运行的线程，并处理失败时的资源回收。
@@ -613,9 +613,9 @@ To U: "en.., Bye, Bye. :)"
 
 | 测试项 | 验证内容 | 结果 |
 |--------|----------|------|
-| PMM | 页映射建立、替换、重复映射、引用计数和删除 | OK |
-| Process Create | `idleproc` 和 `initproc` 的状态、父进程、内核栈及上下文；无普通可运行线程时回退空闲线程 | OK |
-| Schedule | 两个内核线程在多次主动调度中均获得执行，`initproc` 输出预期内容 | OK |
+| PMM | 页映射建立、替换、重复映射、引用计数、删除，以及页表分配失败时的回滚 | OK |
+| Process Create | `idleproc` 和 `initproc` 的状态、父进程、内核栈及上下文，空闲线程链表节点初始化；无普通可运行线程时回退空闲线程 | OK |
+| Schedule | 两个内核线程在多次主动调度中均获得执行，跨切换恢复中断状态，`initproc` 输出预期内容 | OK |
 
 完整评分的实际结果：
 
