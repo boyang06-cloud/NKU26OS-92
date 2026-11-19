@@ -59,13 +59,22 @@ void test_lab4_process_create(void)
     assert(initproc->parent == idleproc && initproc->mm == NULL);
     assert(initproc->context.ra != 0 && initproc->context.sp != 0);
 
+    // With no runnable ordinary process, scheduling must fall back to idle.
+    int idle_runs = idleproc->runs;
+    initproc->state = PROC_SLEEPING;
+    idleproc->need_resched = 1;
+    schedule();
+    assert(current == idleproc && idleproc->runs == idle_runs + 1);
+    assert(!idleproc->need_resched);
+    initproc->state = PROC_RUNNABLE;
+
     lab4_pass("Process Create");
 }
 
 static volatile int test_thread1_ran;
 static volatile int test_thread2_ran;
 
-static void test_lab4_thread(void *arg)
+static int test_lab4_thread(void *arg)
 {
     int id = (int)(intptr_t)arg;
     int i;
@@ -81,6 +90,7 @@ static void test_lab4_thread(void *arg)
         current->need_resched = 1;
         schedule();
     }
+    return 0;
 }
 
 void test_lab4_schedule(void)
