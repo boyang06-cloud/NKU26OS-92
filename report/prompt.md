@@ -1,5 +1,5 @@
 # 功能模块一
-```
+````
 **任务**：修改 `kern/mm/pmm.c` 中模块一对应的位置，实现虚拟内存页的映射建立、更新和撤销。
 
 **操作要求**：
@@ -35,7 +35,7 @@ int page_insert(pde_t *pgdir, struct Page *page,
                 uintptr_t la, uint32_t perm);
 
 void page_remove(pde_t *pgdir, uintptr_t la);
-
+```
 
 可以添加只在 `pmm.c` 内使用的 `static` 辅助函数，不改变公开接口。
 
@@ -226,5 +226,102 @@ static int copy_mm(uint32_t clone_flags, struct proc_struct *proc);
 
 **Requirements**：
 - 当前阶段不做真正的 mm 复制，但函数形态要保留，方便后续实验扩展。
+````
+
+# 功能模块三
+
+````markdown
+[PROMPT]
+
+**任务**：实现进程调度功能，使已经创建的内核线程能够获得 CPU 并运行。修改以下实际文件：
+
+- `kern/process/proc.c`：实现空闲循环 `cpu_idle` 和进程切换入口 `proc_run`。
+- `kern/schedule/sched.c`：实现调度选择函数 `schedule`。
+- `kern/process/switch.S`：实现保存和恢复寄存器上下文的 `switch_to`。
+
+**操作要求**：
+
+1. 必须修改项目中的实际文件，在模块三标记位置补全实现，保留已有进程创建、内存管理和中断处理逻辑。
+2. 以项目中的真实声明和数据结构为准，不改变四个公开接口的签名；可增加仅供模块内部使用的 `static` 辅助函数。
+3. 调度选择与进程切换的关键步骤必须受关中断临界区保护，恢复中断时保留进入临界区之前的状态。
+4. 本次只实现内核线程调度，不扩展用户进程、进程退出或抢占式时间片机制。
+
+**输出要求**：直接修改文件并进行实际构建和测试，说明首次调度链路、调度策略、实际测试结果，以及遇到的构建或测试限制。测试应覆盖空闲线程首次调度、多个可运行线程轮转、无普通可运行线程时回退空闲线程和上下文切换。不要把未执行的测试写成通过。
+
+[RELY]
+
+- `kern/process/proc.h` 定义 `struct proc_struct`；本模块使用 `state`、`need_resched`、`runs`、`pgdir`、`context` 和 `list_link`，以及 `PROC_RUNNABLE`。`proc->pgdir` 保存页表根的物理地址。
+- `struct context` 的字段按顺序为 `uintptr_t ra, sp, s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11`。本项目为 RV64，字段均为 8 字节；汇编中的偏移和访问宽度须与实际布局一致。
+- `proc_list` 是带头结点的双向循环链表；`list_next` 和 `le2proc(le, list_link)` 可用于遍历。`current` 指向当前线程，`idleproc` 是空闲线程，初始化时不挂入 `proc_list`。
+- `local_intr_save(intr_flag)` 保存原中断状态并关中断，`local_intr_restore(intr_flag)` 按保存的状态恢复；可以嵌套使用。
+- `write_csr(satp, value)`、`SATP_MODE_SV39`、`RISCV_PGSHIFT`、`flush_tlb()` 和 `boot_pgdir_pa` 可用于页表切换。Sv39 的 MODE 位于 RV64 `satp` 的高 4 位，参考 `kern/mm/pmm.c` 中 `enable_paging()`；`libs/riscv.h` 的 `lsatp()` 使用 Sv32 格式，本实验不可调用。
+- 模块二的 `copy_thread` 已准备首次运行所需的 `context` 和 trapframe：`context.ra` 指向 `forkret`，首次切换后经 `forkret -> forkrets -> __trapret` 恢复执行现场并进入线程入口。
+- 当前 `proc_init` 将 `idleproc->need_resched` 初始化为 0；现有时钟中断处理不会设置该标志。进入空闲循环时需要主动触发首次调度，确保 `initproc` 能够运行。
+- `tools/test_lab4.c` 和 `tools/inject.py` 提供 PMM、进程创建和调度测试；`tools/grade.sh` 检查测试标记与 `initproc` 输出。
+
+[GUARANTEE]
+
+必须实现以下接口：
+
+```c
+void cpu_idle(void);                                      // kern/process/proc.c
+void schedule(void);                                      // kern/schedule/sched.c
+void proc_run(struct proc_struct *proc);                  // kern/process/proc.c
+void switch_to(struct context *from, struct context *to); // kern/process/switch.S
+```
+
+保留 `cpu_idle` 已声明的 `noreturn` 属性；汇编符号 `switch_to` 须能由 C 代码链接调用。
+
+[SPECIFICATION]
+
+## cpu_idle
+
+**Pre-Condition**：进程表和空闲线程已初始化，`current == idleproc`；内核已完成时钟和中断初始化。
+
+**Post-Condition**：函数持续运行且不返回；当空闲线程需要调度时调用 `schedule`，让其他可运行线程获得 CPU。
+
+**Case 1：首次进入空闲循环**：主动产生一次调度请求，使已经创建的 `initproc` 可以运行，即使当前没有任何时钟中断设置 `need_resched`。
+
+**Case 2：空闲线程重新获得 CPU**：继续检查调度标志；有请求时调度，无请求时继续等待。
+
+**Requirements**：不要依赖现有时钟中断自动请求重调度，也不要无条件关闭中断后忙等。
+
+## schedule
+
+**Pre-Condition**：`current`、`idleproc` 和 `proc_list` 已初始化，调用线程允许进入调度过程。
+
+**Post-Condition**：清除发起调度的当前线程的 `need_resched`；按循环顺序选择一个 `PROC_RUNNABLE` 线程，增加被选线程的 `runs`，并通过 `proc_run` 完成必要的切换。
+
+**Case 1：当前线程为普通线程**：从其链表节点的下一个节点开始循环检查，跳过头结点和不可运行的线程，最多遍历一轮；若其他线程均不可运行但当前线程仍可运行，可以再次选择当前线程。
+
+**Case 2：当前线程为 `idleproc`**：从 `proc_list` 的第一个普通进程开始检查，不能把未加入链表的 `idleproc->list_link` 当作遍历起点。
+
+**Case 3：没有可运行的普通线程**：选择 `idleproc` 作为回退线程；链表为空时也必须安全处理。
+
+**Requirements**：选择过程、标志与计数更新以及调用 `proc_run` 的关键路径处于关中断保护下；当被切走的线程以后恢复执行时，正确恢复其进入本次调度前的中断状态。不能将链表头解释为进程节点，也不能产生无限遍历。
+
+## proc_run
+
+**Pre-Condition**：`proc` 指向有效的可运行线程，`current` 指向当前线程，目标页表根物理地址有效。
+
+**Post-Condition**：若目标线程与当前线程不同，保存旧线程的执行上下文并切换到目标线程；目标运行期间 `current`、活动页表和实际执行现场相互对应。被切走的线程以后恢复时，从其原来的切换点继续执行，并恢复其原有中断状态。
+
+**Case 1：`proc == current`**：直接返回，不重复切换页表或上下文。
+
+**Case 2：`proc != current`**：在关中断的临界区保存旧线程指针、更新 `current`，按目标 `pgdir` 设置 Sv39 `satp`、刷新 TLB，并调用 `switch_to` 切换上下文。
+
+**Requirements**：Sv39 MODE 和页表物理页号应使用足够宽的无符号类型组合；保持切换步骤的原子性，按保存的状态恢复中断。内核线程使用 `boot_pgdir_pa` 对应的内核页表；不得使用 Sv32 的 `lsatp()`。
+
+## switch_to
+
+**Pre-Condition**：`from` 和 `to` 分别指向有效的旧、目标 `struct context`，两个上下文在切换期间保持有效。
+
+**Post-Condition**：保存旧线程的 `ra`、`sp` 和 `s0` 至 `s11`，恢复目标线程的对应寄存器，再从恢复的 `ra` 继续执行；旧线程以后恢复时从调用后的下一条指令继续。
+
+**Case 1：目标线程首次运行**：恢复模块二准备的 `ra` 和 `sp`，进入既有的 `forkret -> forkrets -> __trapret` 链路。
+
+**Case 2：目标线程曾被切走**：恢复其保存的现场，继续之前暂停的执行。
+
+**Requirements**：按 RV64 ABI 使用正确的寄存器宽度与结构体偏移；只负责上下文保存和恢复，不选择线程、不修改 `current`、不切换页表。
 ````
 
