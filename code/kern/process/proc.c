@@ -240,6 +240,8 @@ alloc_proc(void)
         proc->pgdir = boot_pgdir_pa;
         proc->flags = 0;
         memset(proc->name, 0, sizeof(proc->name));
+        list_init(&proc->list_link);
+        list_init(&proc->hash_link);
     }
     return proc;
 }

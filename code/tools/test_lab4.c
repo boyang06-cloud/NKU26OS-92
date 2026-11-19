@@ -1,9 +1,11 @@
 #include <defs.h>
 #include <assert.h>
+#include <error.h>
 #include <pmm.h>
 #include <proc.h>
 #include <sched.h>
 #include <stdio.h>
+#include <sync.h>
 
 static void lab4_pass(const char *name)
 {
@@ -41,6 +43,37 @@ void test_lab4_pmm_basic(void)
     page_remove(boot_pgdir_va, 2 * PGSIZE);
     assert(page_ref(p1) == 0 && page_ref(p2) == 0 && page_ref(p3) == 0);
 
+    // Force both page-table allocation failures, including partial rollback.
+    free_before = nr_free_pages();
+    struct Page *target = alloc_page(), *page;
+    list_entry_t held;
+    list_init(&held);
+    assert(target != NULL && !(boot_pgdir_va[1] & PTE_V));
+    while ((page = alloc_page()) != NULL)
+    {
+        list_add(&held, &page->page_link);
+    }
+    assert(!list_empty(&held));
+    assert(page_insert(boot_pgdir_va, target, 1UL << 30, PTE_R) == -E_NO_MEM);
+    assert(!(boot_pgdir_va[1] & PTE_V) && page_ref(target) == 0);
+
+    list_entry_t *le = list_next(&held);
+    list_del(le);
+    free_page(le2page(le, page_link));
+    assert(nr_free_pages() == 1);
+    assert(page_insert(boot_pgdir_va, target, 1UL << 30, PTE_R) == -E_NO_MEM);
+    assert(!(boot_pgdir_va[1] & PTE_V));
+    assert(page_ref(target) == 0 && nr_free_pages() == 1);
+
+    while (!list_empty(&held))
+    {
+        le = list_next(&held);
+        list_del(le);
+        free_page(le2page(le, page_link));
+    }
+    free_page(target);
+    assert(nr_free_pages() == free_before);
+
     lab4_pass("PMM");
 }
 
@@ -53,6 +86,8 @@ void test_lab4_process_create(void)
     assert(idleproc->parent == NULL && idleproc->mm == NULL);
     assert(idleproc->tf == NULL && idleproc->runs == 0);
     assert(idleproc->flags == 0 && idleproc->context.ra == 0);
+    assert(list_empty(&idleproc->list_link));
+    assert(list_empty(&idleproc->hash_link));
 
     assert(initproc != NULL && initproc->pid == 1);
     assert(initproc->state == PROC_RUNNABLE);
@@ -99,6 +134,15 @@ void test_lab4_schedule(void)
     test_thread1_ran = test_thread2_ran = 0;
     assert(kernel_thread(test_lab4_thread, (void *)(intptr_t)1, 0) > 0);
     assert(kernel_thread(test_lab4_thread, (void *)(intptr_t)2, 0) > 0);
+
+    // A switch inside an existing critical section must keep interrupts off.
+    bool intr_flag;
+    local_intr_save(intr_flag);
+    current->need_resched = 1;
+    schedule();
+    assert((read_csr(sstatus) & SSTATUS_SIE) == 0);
+    local_intr_restore(intr_flag);
+    assert(((read_csr(sstatus) & SSTATUS_SIE) != 0) == intr_flag);
 
     for (i = 0; i < 8; i++)
     {
