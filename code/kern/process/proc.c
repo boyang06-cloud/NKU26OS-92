@@ -371,7 +371,8 @@ void proc_init(void)
     idleproc->pid = 0;
     idleproc->state = PROC_RUNNABLE;
     idleproc->kstack = (uintptr_t)bootstack;
-    idleproc->need_resched = 0;
+    // let idleproc give up the CPU as soon as cpu_idle starts
+    idleproc->need_resched = 1;
     set_proc_name(idleproc, "idle");
     nr_process++;
 
