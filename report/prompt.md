@@ -161,7 +161,7 @@ static int copy_mm(uint32_t clone_flags, struct proc_struct *proc);
 - `pmm_init`、`vmm_init` 已完成，`bootstack`、`boot_pgdir_pa` 有效。
 
 **Post-Condition**：
-- `proc_list` 与 `hash_list` 已初始化；`idleproc` 的 pid 为 0、状态为 `PROC_RUNNABLE`、`kstack` 指向 `bootstack`；`current == idleproc`；`initproc` 存在且 pid 为 1、父进程为 `idleproc`。
+- `proc_list` 与 `hash_list` 已初始化；`idleproc` 的 pid 为 0、状态为 `PROC_RUNNABLE`、`kstack` 指向 `bootstack`、`need_resched` 置 1；`current == idleproc`；`initproc` 存在且 pid 为 1、父进程为 `idleproc`。
 
 **Case 1**：`idleproc` 分配失败时调用 `panic`，因为后续流程没有可运行的执行现场。
 
