@@ -391,7 +391,7 @@ void proc_init(void)
     assert(initproc != NULL && initproc->pid == 1);
 }
 
-// LAB4 function3: idle loop and process context switching
+//LAB4 function3 2410550
 void
 cpu_idle(void)
 {

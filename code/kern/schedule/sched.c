@@ -10,7 +10,7 @@ wakeup_proc(struct proc_struct *proc) {
     proc->state = PROC_RUNNABLE;
 }
 
-// LAB4 function3: round-robin selection from the process list
+//LAB4 function3 2410550
 void
 schedule(void)
 {
