@@ -628,13 +628,13 @@ Total Score: 30/30
 
 ### 5.3 已保存的测试截图
 
-下图记录模块二阶段的 QEMU 输出，包含 PMM 和进程创建测试：
+下图记录模块二与模块三合并后的 QEMU 输出，包含 PMM、进程创建和调度三项测试：
 
-![模块二阶段 QEMU 输出](./images/lab4_qemu.png)
+![QEMU 输出](./images/lab4_qemu.png)
 
-下图记录模块二阶段的测试输出：
+下图汇总注入测试的验证结果：
 
-![模块二阶段测试输出](./images/lab4_grade.png)
+![测试输出](./images/lab4_grade.png)
 
 ---
 
