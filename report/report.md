@@ -434,7 +434,7 @@ void switch_to(struct context *from, struct context *to); // kern/process/switch
 
 #### 实现过程与关键处理
 
-1. **首次调度**：`proc_init` 将 `idleproc->need_resched` 设为 0，现有时钟中断处理不会设置该标志。`cpu_idle` 首次进入时主动置位，再进入检查循环，从而让已经创建的 `initproc` 获得 CPU。
+1. **首次调度**：`proc_init` 将 `idleproc->need_resched` 设为 1，`cpu_idle` 首次进入时也会置位该标志，然后进入检查循环，让已经创建的 `initproc` 获得 CPU。现有时钟中断处理不会设置该标志。
 2. **轮转选择**：`schedule` 先保存中断状态并关中断，清除当前线程的调度请求，再沿 `proc_list` 从当前线程之后查找 `PROC_RUNNABLE` 线程。`idleproc` 不在普通进程链表中，当前线程为空闲线程时从链表头开始。遍历一轮后仍没有可运行的普通线程，就选择 `idleproc`。选中后增加目标线程的 `runs`。
 3. **切换进程与地址空间**：当目标与当前进程不同时，`proc_run` 在关中断状态下保存旧进程指针、更新 `current`，将 Sv39 的 MODE 和目标页表根物理页号写入 `satp`，执行 `sfence.vma`，再调用 `switch_to`。原线程被再次调度后，从切换点继续执行并恢复先前的中断状态。
 4. **保存和恢复上下文**：`switch_to` 使用 RV64 的 `sd` 和 `ld`，按 `struct context` 中的字段顺序保存和恢复 `ra`、`sp` 与 `s0` 至 `s11`。第一次切换到新线程时，恢复的 `ra` 指向 `forkret`；线程再次运行时则回到之前调用 `switch_to` 的位置。
@@ -468,7 +468,7 @@ void switch_to(struct context *from, struct context *to); // kern/process/switch
 - `local_intr_save(intr_flag)` 保存原中断状态并关中断，`local_intr_restore(intr_flag)` 按保存的状态恢复；可以嵌套使用。
 - `write_csr(satp, value)`、`SATP_MODE_SV39`、`RISCV_PGSHIFT`、`flush_tlb()` 和 `boot_pgdir_pa` 可用于页表切换。Sv39 的 MODE 位于 RV64 `satp` 的高 4 位，参考 `kern/mm/pmm.c` 中 `enable_paging()`；`libs/riscv.h` 的 `lsatp()` 使用 Sv32 格式，本实验不可调用。
 - 模块二的 `copy_thread` 已准备首次运行所需的 `context` 和 trapframe：`context.ra` 指向 `forkret`，首次切换后经 `forkret -> forkrets -> __trapret` 恢复执行现场并进入线程入口。
-- 当前 `proc_init` 将 `idleproc->need_resched` 初始化为 0；现有时钟中断处理不会设置该标志。进入空闲循环时需要主动触发首次调度，确保 `initproc` 能够运行。
+- 编写此提示词时，`proc_init` 将 `idleproc->need_resched` 初始化为 0；现有时钟中断处理不会设置该标志。进入空闲循环时需要主动触发首次调度，确保 `initproc` 能够运行。
 - `tools/test_lab4.c` 和 `tools/inject.py` 提供 PMM、进程创建和调度测试；`tools/grade.sh` 检查测试标记与 `initproc` 输出。
 
 [GUARANTEE]

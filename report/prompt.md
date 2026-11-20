@@ -256,7 +256,7 @@ static int copy_mm(uint32_t clone_flags, struct proc_struct *proc);
 - `local_intr_save(intr_flag)` 保存原中断状态并关中断，`local_intr_restore(intr_flag)` 按保存的状态恢复；可以嵌套使用。
 - `write_csr(satp, value)`、`SATP_MODE_SV39`、`RISCV_PGSHIFT`、`flush_tlb()` 和 `boot_pgdir_pa` 可用于页表切换。Sv39 的 MODE 位于 RV64 `satp` 的高 4 位，参考 `kern/mm/pmm.c` 中 `enable_paging()`；`libs/riscv.h` 的 `lsatp()` 使用 Sv32 格式，本实验不可调用。
 - 模块二的 `copy_thread` 已准备首次运行所需的 `context` 和 trapframe：`context.ra` 指向 `forkret`，首次切换后经 `forkret -> forkrets -> __trapret` 恢复执行现场并进入线程入口。
-- 当前 `proc_init` 将 `idleproc->need_resched` 初始化为 0；现有时钟中断处理不会设置该标志。进入空闲循环时需要主动触发首次调度，确保 `initproc` 能够运行。
+- 编写此提示词时，`proc_init` 将 `idleproc->need_resched` 初始化为 0；现有时钟中断处理不会设置该标志。进入空闲循环时需要主动触发首次调度，确保 `initproc` 能够运行。
 - `tools/test_lab4.c` 和 `tools/inject.py` 提供 PMM、进程创建和调度测试；`tools/grade.sh` 检查测试标记与 `initproc` 输出。
 
 [GUARANTEE]
