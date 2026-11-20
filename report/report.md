@@ -64,7 +64,7 @@
 1. **虚拟内存页操作**：实现 `page_insert` 和 `page_remove`，处理引用计数、映射替换和 TLB 刷新，为地址空间管理提供基础。
 2. **进程创建与初始化**：分配并初始化 PCB 和内核栈，设置 PID、链表和初始上下文，建立 `idleproc` 和 `initproc`。
 3. **进程调度与切换**：通过循环链表选择可运行线程，在关中断的临界区内更新 `current`、切换 Sv39 页表并保存和恢复上下文。
-4. **集成测试**：在临时副本中注入 PMM、进程创建和调度测试，结合 QEMU 运行结果验证线程创建与执行路径。
+4. **集成测试**：注入 PMM、进程创建和调度测试，结合 QEMU 运行结果验证线程创建与执行路径。
 
 ---
 
@@ -589,23 +589,13 @@ RISC-V 的分页是把虚拟地址按位段切开、逐级索引页表：Sv32 �
 
 ## 五、测试与验证
 
-### 5.1 构建和运行
+### 5.1 构建与运行
 
-在 `code` 目录执行 `make -j4`，RISC-V 内核和 `bin/ucore.img` 构建成功。通过 QEMU 的 `virt` 机器加载镜像后，内核完成物理内存、SLUB、虚拟内存和进程初始化，随后进入 `initproc`。实际输出包括：
+在 `code` 目录执行 `make qemu`，构建内核镜像并通过 QEMU 启动。物理页分配、页表和虚拟内存自检均通过，SLUB 两轮测试全部通过。内核随后完成从 `idleproc` 到 `initproc` 的首次调度。
 
-```text
-check_alloc_page() succeeded!
-check_pgdir() succeeded!
-check_boot_pgdir() succeeded!
-check_vma_struct() succeeded!
-check_vmm() succeeded.
-++ setup timer interrupts
-this initproc, pid = 1, name = "init"
-To U: "Hello world!!".
-To U: "en.., Bye, Bye. :)"
-```
+![make qemu 运行结果](./images/lab4_make_qemu.png)
 
-`init_main` 返回后通过 `kernel_thread_entry` 进入现有的 `do_exit`，当前框架在该函数中输出 `process exit` panic。上述输出验证了从 `idleproc` 到 `initproc` 的首次调度及线程入口执行。
+`init_main` 返回后，`kernel_thread_entry` 调用当前框架的 `do_exit`。该函数会触发 `process exit` panic，内核随后进入调试监视器。
 
 ### 5.2 评分测试
 
@@ -617,24 +607,9 @@ To U: "en.., Bye, Bye. :)"
 | Process Create | `idleproc` 和 `initproc` 的状态、父进程、内核栈及上下文，空闲线程链表节点初始化；无普通可运行线程时回退空闲线程 | OK |
 | Schedule | 两个内核线程在多次主动调度中均获得执行，跨切换恢复中断状态，`initproc` 输出预期内容 | OK |
 
-完整评分的实际结果：
+在 `code` 目录执行 `make grade`。PMM、Process Create 和 Schedule 三项检查均通过，总分为 30/30。
 
-```text
-  -check PMM:                                OK
-  -check Process Create:                     OK
-  -check Schedule:                           OK
-Total Score: 30/30
-```
-
-### 5.3 已保存的测试截图
-
-下图记录模块二与模块三合并后的 QEMU 输出，包含 PMM、进程创建和调度三项测试：
-
-![QEMU 输出](./images/lab4_qemu.png)
-
-下图汇总注入测试的验证结果：
-
-![测试输出](./images/lab4_grade.png)
+![make grade 评分结果](./images/lab4_make_grade.png)
 
 ---
 
